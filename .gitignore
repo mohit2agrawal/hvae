@@ -1,0 +1,7 @@
+*.pyc
+.vscode
+DATA
+backup
+model_logs*
+models_ckpts*
+trained_embeddings*
