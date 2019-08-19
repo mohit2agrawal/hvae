@@ -146,17 +146,81 @@ def zsent_encoder(encoder_input, seq_len, batch_size):
     return final_state
 
 
+def encoder_model(encoder_input, label_input, seq_len, batch_size):
+
+    # construct lstm
+    if params.base_cell == 'lstm':
+        base_cell = tf.contrib.rnn.LSTMCell
+    elif params.base_cell == 'rnn':
+        base_cell = tf.contrib.rnn.RNNCell
+    else:
+        base_cell = tf.contrib.rnn.GRUCell
+
+    cell_a = model.make_rnn_cell(
+        [params.encoder_hidden for _ in range(params.decoder_rnn_layers)],
+        base_cell=base_cell
+    )
+    initial_a = cell_a.zero_state(batch_size, dtype=tf.float64)
+
+    if params.keep_rate < 1:
+        encoder_input = tf.nn.dropout(encoder_input, params.keep_rate)
+
+    # sequence_length: An int32/int64 vector sized [batch_size]
+    # 'outputs' is a Tensor shaped: [batch_size, max_time, cell.output_size]
+    # 'final_state' is a tensor of shape [batch_size, cell.state_size]
+    outputs_a, final_state_a = tf.nn.dynamic_rnn(
+        cell_a,
+        inputs=encoder_input,
+        sequence_length=seq_len,
+        initial_state=initial_a,
+        swap_memory=True,
+        dtype=tf.float64,
+        scope="zsent_encoder_rnn"
+    )
+    final_state_a = tf.concat(final_state_a[0], 1)
+
+    # prepare input
+    # concatenate 'outputs_a' from previous lstm with 'labels'
+    # to form the input to next lstm
+    encoder_input_b = tf.concat([label_input, outputs_a], -1)
+
+    # bs, T = tf.shape(label_input)[0], tf.shape(label_input)[1]
+    # zsent_sample = tf.tile(tf.expand_dims(zsent_sample, 1), (1, T, 1))
+    # x_z2 = tf.concat([label_input, zsent_sample], axis=-1)
+    # encoder_input_b = x_z2
+
+    cell_b = model.make_rnn_cell(
+        [params.encoder_hidden for _ in range(params.decoder_rnn_layers)],
+        base_cell=base_cell
+    )
+    initial_b = cell_b.zero_state(batch_size, dtype=tf.float64)
+
+    if params.keep_rate < 1:
+        encoder_input_b = tf.nn.dropout(encoder_input_b, params.keep_rate)
+    outputs_b, final_state_b = tf.nn.dynamic_rnn(
+        cell_b,
+        inputs=encoder_input_b,
+        sequence_length=seq_len,
+        initial_state=initial_b,
+        swap_memory=True,
+        dtype=tf.float64,
+        scope="zglobal_encoder_rnn"
+    )
+    final_state_b = tf.concat(final_state_b[0], 1)
+    return final_state_a, final_state_b
+
+
 def encoder(encoder_input, label_input, seq_len, batch_size):
     with tf.variable_scope("encoder"):
-        zsent_pre_out = zsent_encoder(encoder_input, seq_len, batch_size)
+        zsent_pre_out, zglobal_pre_out = encoder_model(
+            encoder_input, label_input, seq_len, batch_size
+        )
+
         zsent_mu, zsent_logvar, zsent_sample = gauss_layer(
             zsent_pre_out, params.latent_size, scope="zsent_enc_gauss"
         )
         Zsent_distribution = [zsent_mu, zsent_logvar]
 
-        zglobal_pre_out = zglobal_encoder(
-            label_input, zsent_sample, seq_len, batch_size
-        )
         zglobal_mu, zglobal_logvar, zglobal_sample = gauss_layer(
             zglobal_pre_out, params.latent_size, scope="zglobal_enc_gauss"
         )
