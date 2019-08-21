@@ -159,8 +159,8 @@ def encoder_model(word_input, label_input, seq_len, batch_size):
     label_cell_state = word_cell.zero_state(batch_size, dtype=tf.float64)
 
     ## 'time' major tensors
-    word_input_t = tf.transpose(word_input, [1,0,2])
-    label_input_t = tf.transpose(label_input, [1,0,2])
+    word_input_t = tf.transpose(word_input, [1, 0, 2])
+    label_input_t = tf.transpose(label_input, [1, 0, 2])
 
     ## word_input.shape: [batch_size, time_steps, latent_dim]
     # T = tf.shape(word_input)[1]
@@ -168,9 +168,9 @@ def encoder_model(word_input, label_input, seq_len, batch_size):
         word_cell_output, word_cell_state = word_cell(
             word_input[i], word_cell_state
         )
-
+        label_cell_input = tf.concat([label_input[i], word_cell_state], -1)
         label_cell_output, label_cell_state = label_cell(
-            label_input[i], label_cell_state
+            label_cell_input, label_cell_state
         )
 
     return word_cell_state, label_cell_state
