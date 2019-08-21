@@ -146,68 +146,34 @@ def zsent_encoder(encoder_input, seq_len, batch_size):
     return final_state
 
 
-def encoder_model(encoder_input, label_input, seq_len, batch_size):
+def encoder_model(word_input, label_input, seq_len, batch_size):
 
-    # construct lstm
-    if params.base_cell == 'lstm':
-        base_cell = tf.contrib.rnn.LSTMCell
-    elif params.base_cell == 'rnn':
-        base_cell = tf.contrib.rnn.RNNCell
-    else:
-        base_cell = tf.contrib.rnn.GRUCell
-
-    cell_a = model.make_rnn_cell(
-        [params.encoder_hidden for _ in range(params.decoder_rnn_layers)],
-        base_cell=base_cell
+    ## LSTM cells
+    word_cell = tf.contrib.rnn.LSTMCell(params.encoder_hidden, dtype=tf.float64)
+    label_cell = tf.contrib.rnn.LSTMCell(
+        params.encoder_hidden, dtype=tf.float64
     )
-    initial_a = cell_a.zero_state(batch_size, dtype=tf.float64)
 
-    if params.keep_rate < 1:
-        encoder_input = tf.nn.dropout(encoder_input, params.keep_rate)
+    ## initial (zero) states
+    word_cell_state = word_cell.zero_state(batch_size, dtype=tf.float64)
+    label_cell_state = word_cell.zero_state(batch_size, dtype=tf.float64)
 
-    # sequence_length: An int32/int64 vector sized [batch_size]
-    # 'outputs' is a Tensor shaped: [batch_size, max_time, cell.output_size]
-    # 'final_state' is a tensor of shape [batch_size, cell.state_size]
-    outputs_a, final_state_a = tf.nn.dynamic_rnn(
-        cell_a,
-        inputs=encoder_input,
-        sequence_length=seq_len,
-        initial_state=initial_a,
-        swap_memory=True,
-        dtype=tf.float64,
-        scope="zsent_encoder_rnn"
-    )
-    final_state_a = tf.concat(final_state_a[0], 1)
+    ## 'time' major tensors
+    word_input_t = tf.transpose(word_input, [1,0,2])
+    label_input_t = tf.transpose(label_input, [1,0,2])
 
-    # prepare input
-    # concatenate 'outputs_a' from previous lstm with 'labels'
-    # to form the input to next lstm
-    encoder_input_b = tf.concat([label_input, outputs_a], -1)
+    ## word_input.shape: [batch_size, time_steps, latent_dim]
+    # T = tf.shape(word_input)[1]
+    for i in range(seq_len):
+        word_cell_output, word_cell_state = word_cell(
+            word_input[i], word_cell_state
+        )
 
-    # bs, T = tf.shape(label_input)[0], tf.shape(label_input)[1]
-    # zsent_sample = tf.tile(tf.expand_dims(zsent_sample, 1), (1, T, 1))
-    # x_z2 = tf.concat([label_input, zsent_sample], axis=-1)
-    # encoder_input_b = x_z2
+        label_cell_output, label_cell_state = label_cell(
+            label_input[i], label_cell_state
+        )
 
-    cell_b = model.make_rnn_cell(
-        [params.encoder_hidden for _ in range(params.decoder_rnn_layers)],
-        base_cell=base_cell
-    )
-    initial_b = cell_b.zero_state(batch_size, dtype=tf.float64)
-
-    if params.keep_rate < 1:
-        encoder_input_b = tf.nn.dropout(encoder_input_b, params.keep_rate)
-    outputs_b, final_state_b = tf.nn.dynamic_rnn(
-        cell_b,
-        inputs=encoder_input_b,
-        sequence_length=seq_len,
-        initial_state=initial_b,
-        swap_memory=True,
-        dtype=tf.float64,
-        scope="zglobal_encoder_rnn"
-    )
-    final_state_b = tf.concat(final_state_b[0], 1)
-    return final_state_a, final_state_b
+    return word_cell_state, label_cell_state
 
 
 def encoder(encoder_input, label_input, seq_len, batch_size):
@@ -452,6 +418,83 @@ def lstm_decoder_words(
         return x_logits, (initial_state, final_state), sample
 
 
+def decoder_model(
+    zl,
+    zc,
+    seq_len,
+    batch_size,
+    label_embed,
+    label_vocab_size,
+    word_vocab_size,
+    gen_mode=False,
+    scope=None
+):
+    with tf.variable_scope(scope, "decoder") as sc:
+        ## the two LSTM cells
+        label_cell = tf.contrib.rnn.LSTMCell(
+            params.decoder_hidden, dtype=tf.float64
+        )
+        word_cell = tf.contrib.rnn.LSTMCell(
+            params.decoder_hidden, dtype=tf.float64
+        )
+
+        ## Fully Connected layers for logits
+        label_dense_layer = tf.layers.Dense(label_vocab_size, activation=None)
+        word_dense_layer = tf.layers.Dense(word_vocab_size, activation=None)
+
+        ## zero initial state
+        label_cell_state = rnn_placeholders(
+            label_cell.zero_state(batch_size, tf.float64)
+        )
+        word_cell_zero_state = rnn_placeholders(
+            word_cell.zero_state(batch_size, tf.float64)
+        )
+
+        ## initial input to label LSTM, concat(zl, zero word state)
+        label_cell_input = tf.concat([zl, word_cell_zero_state], -1)
+
+        word_logits_arr = []
+        label_logits_arr = []
+        ## compute the LSTM outputs
+        for i in range(seq_len):
+            ## run the label decoder LSTM
+            label_cell_output, label_cell_state = label_cell(
+                label_cell_input, label_cell_state
+            )
+            ## get the label logits
+            label_logits = label_dense_layer(label_cell_output)
+            label_logits_softmax = tf.nn.softmax(label_logits)
+            label_logits_arr.append(label_logits)
+
+            ## concat zc and label logits and run the word decoder LSTM
+            word_cell_input = tf.concat([zc, label_logits], -1)
+            word_cell_output, word_cell_state = word_cell(
+                word_cell_input, word_cell_state
+            )
+
+            ## input for the label decoder LSTM for next time step
+            label_cell_input = tf.concat([zl, word_cell_state], -1)
+
+            ## get word logits
+            word_logits = word_dense_layer(word_cell_output)
+            word_logits_arr.append(word_logits)
+
+        word_logits_all = tf.stack(word_logits_arr)
+        label_logits_all = tf.stack(label_logits_arr)
+
+        if params.beam_search:
+            word_sample = tf.nn.softmax(word_logits_all)
+            label_sample = tf.nn.softmax(label_logits_all)
+        else:
+            word_sample = tf.multinomial(
+                word_logits_all / params.temperature, 10
+            )[0]
+            label_sample = tf.multinomial(
+                label_logits_all / params.temperature, 10
+            )[0]
+        return word_logits_all, label_logits_all, word_sample, label_sample
+
+
 def decoder(
     zglobal_sample,
     d_word_input,
@@ -466,52 +509,26 @@ def decoder(
     zsent=None,
     inp_logits=None
 ):
+    ##TODO: write code for gen_mode=True
+
+    ## compute zc
+    zsent_dec_mu, zsent_dec_logvar, zsent_dec_sample = gauss_layer(
+        zglobal_sample, params.latent_size, scope="zsent_dec_gauss"
+    )
+    zsent_dec_distribution = [zsent_dec_mu, zsent_dec_logvar]
 
     Zglobal_dec_distribution = [0., np.log(1.0**2).astype(np.float64)]
-    label_logits, (initial_state, final_state), l_sample = lstm_decoder_labels(
+    ## not giving 'd_labels' as input
+    word_logits, label_logits, w_sample, l_sample = decoder_model(
         zglobal_sample,
-        d_labels,
+        zsent_dec_sample,
         seq_length,
         batch_size,
         label_embed,
         label_vocab_size,
+        word_vocab_size,
         gen_mode,
-        scope="zglobal_decoder_rnn"
+        scope="decoder_model_rnn"
     )
-    final_state = tf.concat(final_state[0], 1)
-    # print(zglobal_sample.shape, zglobal_sample.dtype)
-    # print(final_state.shape, final_state.dtype)
-    gaussian_input = tf.concat(
-        [zglobal_sample, final_state], axis=-1
-    )  #########concatinate these as inputs to gaussian layer
-    # print(gaussian_input.shape, gaussian_input.dtype)
-    zsent_dec_mu, zsent_dec_logvar, zsent_dec_sample = gauss_layer(
-        gaussian_input, params.latent_size, scope="zsent_dec_gauss"
-    )
-    zsent_dec_distribution = [zsent_dec_mu, zsent_dec_logvar]
-
-    # d_word_input=tf.cast(d_word_input, tf.float64)
-    # decoder_input=tf.concat([d_word_input,tf.nn.softmax(label_logits)],axis=-1)
-    # print(tf.shape(decoder_input))
-    # print(d_word_input,label_logits)
-    # print("################")
-    if gen_mode:
-        logits = inp_logits
-    else:
-        logits = label_logits
-
-    word_logits, (initial_state_1,
-                  final_state_1), w_sample = lstm_decoder_words(
-                      zsent_dec_sample,
-                      d_word_input,
-                      logits,
-                      seq_length,
-                      batch_size,
-                      word_embed,
-                      word_vocab_size,
-                      gen_mode,
-                      zsent,
-                      scope="zsent_decoder_rnn"
-                  )
 
     return word_logits, label_logits, zsent_dec_distribution, Zglobal_dec_distribution, l_sample, w_sample, zsent_dec_sample
