@@ -89,6 +89,10 @@ def main(params):
             train_label_raw, params
         )
 
+        max_sent_len = max(
+            max(map(len, word_data)), max(map(len, encoder_word_data))
+        )
+
     with tf.Graph().as_default() as graph:
 
         label_inputs = tf.placeholder(
@@ -153,12 +157,13 @@ def main(params):
         # qz = q_net(word_inputs, seq_length, params.batch_size)
 
         Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample = encoder(
-            vect_inputs, label_inputs_1, seq_length, params.batch_size
+            vect_inputs, label_inputs_1, seq_length, params.batch_size,
+            max_sent_len
         )
         word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _ = decoder(
             zglobal_sample, d_word_inputs, d_label_inputs, seq_length,
             params.batch_size, label_embedding, word_embedding, word_vocab_size,
-            label_vocab_size
+            label_vocab_size, max_sent_len
         )
 
         neg_kld_zsent = -1 * tf.reduce_mean(
@@ -318,7 +323,8 @@ def main(params):
                                                      params.batch_size]
 
                     # zero padding
-                    pad = len(max(sent_batch, key=len))
+                    # pad = len(max(sent_batch, key=len))
+                    pad = max_sent_len
                     # not optimal!!
                     length_ = np.array([len(sent) for sent in sent_batch]
                                        ).reshape(params.batch_size)
