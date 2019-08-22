@@ -146,12 +146,14 @@ def zsent_encoder(encoder_input, seq_len, batch_size):
     return final_state
 
 
-def encoder_model(word_input, label_input, seq_len, batch_size):
+def encoder_model(word_input, label_input, seq_len, batch_size, max_sent_len):
 
     ## LSTM cells
-    word_cell = tf.contrib.rnn.LSTMCell(params.encoder_hidden, dtype=tf.float64)
+    word_cell = tf.contrib.rnn.LSTMCell(
+        params.encoder_hidden, dtype=tf.float64, state_is_tuple=False
+    )
     label_cell = tf.contrib.rnn.LSTMCell(
-        params.encoder_hidden, dtype=tf.float64
+        params.encoder_hidden, dtype=tf.float64, state_is_tuple=False
     )
 
     ## initial (zero) states
@@ -163,12 +165,11 @@ def encoder_model(word_input, label_input, seq_len, batch_size):
     label_input_t = tf.transpose(label_input, [1, 0, 2])
 
     ## word_input.shape: [batch_size, time_steps, latent_dim]
-    # T = tf.shape(word_input)[1]
-    for i in range(seq_len):
+    for i in range(max_sent_len):
         word_cell_output, word_cell_state = word_cell(
-            word_input[i], word_cell_state
+            word_input_t[i], word_cell_state
         )
-        label_cell_input = tf.concat([label_input[i], word_cell_state], -1)
+        label_cell_input = tf.concat([label_input_t[i], word_cell_state], -1)
         label_cell_output, label_cell_state = label_cell(
             label_cell_input, label_cell_state
         )
@@ -176,10 +177,10 @@ def encoder_model(word_input, label_input, seq_len, batch_size):
     return word_cell_state, label_cell_state
 
 
-def encoder(encoder_input, label_input, seq_len, batch_size):
+def encoder(encoder_input, label_input, seq_len, batch_size, max_sent_len):
     with tf.variable_scope("encoder"):
         zsent_pre_out, zglobal_pre_out = encoder_model(
-            encoder_input, label_input, seq_len, batch_size
+            encoder_input, label_input, seq_len, batch_size, max_sent_len
         )
 
         zsent_mu, zsent_logvar, zsent_sample = gauss_layer(
@@ -426,16 +427,17 @@ def decoder_model(
     label_embed,
     label_vocab_size,
     word_vocab_size,
+    max_sent_len,
     gen_mode=False,
     scope=None
 ):
     with tf.variable_scope(scope, "decoder") as sc:
         ## the two LSTM cells
         label_cell = tf.contrib.rnn.LSTMCell(
-            params.decoder_hidden, dtype=tf.float64
+            params.decoder_hidden, dtype=tf.float64, state_is_tuple=False
         )
         word_cell = tf.contrib.rnn.LSTMCell(
-            params.decoder_hidden, dtype=tf.float64
+            params.decoder_hidden, dtype=tf.float64, state_is_tuple=False
         )
 
         ## Fully Connected layers for logits
@@ -446,17 +448,17 @@ def decoder_model(
         label_cell_state = rnn_placeholders(
             label_cell.zero_state(batch_size, tf.float64)
         )
-        word_cell_zero_state = rnn_placeholders(
+        word_cell_state = rnn_placeholders(
             word_cell.zero_state(batch_size, tf.float64)
         )
 
         ## initial input to label LSTM, concat(zl, zero word state)
-        label_cell_input = tf.concat([zl, word_cell_zero_state], -1)
+        label_cell_input = tf.concat([zl, word_cell_state], -1)
 
         word_logits_arr = []
         label_logits_arr = []
         ## compute the LSTM outputs
-        for i in range(seq_len):
+        for i in range(max_sent_len):
             ## run the label decoder LSTM
             label_cell_output, label_cell_state = label_cell(
                 label_cell_input, label_cell_state
@@ -467,20 +469,20 @@ def decoder_model(
             label_logits_arr.append(label_logits)
 
             ## concat zc and label logits and run the word decoder LSTM
-            word_cell_input = tf.concat([zc, label_logits], -1)
+            word_cell_input = tf.concat([zc, label_logits_softmax], axis=-1)
             word_cell_output, word_cell_state = word_cell(
                 word_cell_input, word_cell_state
             )
 
             ## input for the label decoder LSTM for next time step
-            label_cell_input = tf.concat([zl, word_cell_state], -1)
+            label_cell_input = tf.concat([zl, word_cell_state], axis=-1)
 
             ## get word logits
             word_logits = word_dense_layer(word_cell_output)
             word_logits_arr.append(word_logits)
 
-        word_logits_all = tf.stack(word_logits_arr)
-        label_logits_all = tf.stack(label_logits_arr)
+        word_logits_all = tf.concat(word_logits_arr, axis=0)
+        label_logits_all = tf.concat(label_logits_arr, axis=0)
 
         if params.beam_search:
             word_sample = tf.nn.softmax(word_logits_all)
@@ -505,6 +507,7 @@ def decoder(
     word_embed,
     word_vocab_size,
     label_vocab_size,
+    max_sent_len,
     gen_mode=False,
     zsent=None,
     inp_logits=None
@@ -527,8 +530,9 @@ def decoder(
         label_embed,
         label_vocab_size,
         word_vocab_size,
+        max_sent_len,
         gen_mode,
-        scope="decoder_model_rnn"
+        scope="decoder_model_rnn",
     )
 
     return word_logits, label_logits, zsent_dec_distribution, Zglobal_dec_distribution, l_sample, w_sample, zsent_dec_sample
