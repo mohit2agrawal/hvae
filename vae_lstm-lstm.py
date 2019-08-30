@@ -18,6 +18,8 @@ from utils.ptb import reader
 
 from tqdm import tqdm
 import pickle
+import logging
+from logging.handlers import RotatingFileHandler
 
 
 class PTBInput(object):
@@ -31,22 +33,6 @@ class PTBInput(object):
         )
 
 
-def rnn_placeholders(state):
-    """Convert RNN state tensors to placeholders with the zero state as default."""
-    if isinstance(state, tf.contrib.rnn.LSTMStateTuple):
-        c, h = state
-        c = tf.placeholder_with_default(c, c.shape, c.op.name)
-        h = tf.placeholder_with_default(h, h.shape, h.op.name)
-        return tf.contrib.rnn.LSTMStateTuple(c, h)
-    elif isinstance(state, tf.Tensor):
-        h = state
-        h = tf.placeholder_with_default(h, h.shape, h.op.name)
-        return h
-    else:
-        structure = [rnn_placeholders(x) for x in state]
-        return tuple(structure)
-
-
 def kld(p_mu, p_logvar, q_mu, q_logvar):
     """
     compute D_KL(p || q) of two Gaussians
@@ -57,33 +43,31 @@ def kld(p_mu, p_logvar, q_mu, q_logvar):
     )
 
 
-def max_likelihood_loss(word_logits, d_word_labels):
-    w_probs = tf.nn.softmax(word_logits)
-    d_word_labels_flat = tf.reshape(d_word_labels, [-1])
-    w_mask_labels = tf.sign(tf.cast(d_word_labels_flat, dtype=tf.float64))
-    w_probs_flat = tf.reshape(w_probs, [-1])
-    w_index = tf.range(tf.shape(d_word_labels_flat)[0]
-                       ) * tf.shape(w_probs)[1] + d_word_labels_flat
-    w_index_probs = tf.gather(w_probs_flat, w_index)
-    w_log = -tf.log(w_index_probs + 1e-8)
-    w_masked_cost = w_log * w_mask_labels
-    w_cost_1 = tf.reshape(w_masked_cost, tf.shape(word_inputs))
-    w_cost = tf.reduce_sum(w_cost_1, axis=1)
-    return w_cost
+def zero_pad(sentences, max_len):
+    return np.array([sent + [0] * (max_len - len(sent)) for sent in sentences])
+
+
+def write_lists_to_file(filename, *lists):
+    with open(filename, 'w') as f:
+        for lst in lists:
+            for x in lst:
+                f.write(str(x))
+                f.write(' ')
+            f.write('\n')
 
 
 def main(params):
     if params.input_ == 'PTB':
+        # data_folder = './DATA/parallel_data_10k/'
+        data_folder = './DATA/ptb/'
         # data in form [data, labels]
-        train_data_raw, train_label_raw = data_.ptb_read(
-            './DATA/parallel_data_10k/'
-        )
+        train_data_raw, train_label_raw = data_.ptb_read(data_folder)
         word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict = data_.prepare_data(
-            train_data_raw, train_label_raw, params, './DATA/parallel_data_10k/'
+            train_data_raw, train_label_raw, params, data_folder
         )
 
         train_label_raw, valid_label_raw, test_label_raw = label_data_.ptb_read(
-            './DATA/parallel_data_10k/'
+            data_folder
         )
         label_data, label_labels_arr, label_embed_arr, label_data_dict = label_data_.prepare_data(
             train_label_raw, params
@@ -100,13 +84,6 @@ def main(params):
         )
         word_inputs = tf.placeholder(
             dtype=tf.int32, shape=[None, None], name="word_inputs"
-        )
-
-        d_word_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="d_word_inputs"
-        )
-        d_label_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="d_label_inputs"
         )
 
         d_word_labels = tf.placeholder(
@@ -152,18 +129,32 @@ def main(params):
         sizes = word_data_dict.sizes
         word_vocab_size = max(sizes[1], sizes[2], sizes[0])
         label_vocab_size = label_data_dict.vocab_size
-        seq_length = tf.placeholder_with_default([0.0], shape=[None])
+        # seq_length = tf.placeholder_with_default([0.0], shape=[None])
         d_seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
         # qz = q_net(word_inputs, seq_length, params.batch_size)
 
-        Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample = encoder(
-            vect_inputs, label_inputs_1, seq_length, params.batch_size,
-            max_sent_len
+        Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
+            vect_inputs, label_inputs_1, params.batch_size, max_sent_len
         )
         word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _ = decoder(
-            zglobal_sample, d_word_inputs, d_label_inputs, seq_length,
-            params.batch_size, label_embedding, word_embedding, word_vocab_size,
+            zglobal_sample, params.batch_size, word_vocab_size,
             label_vocab_size, max_sent_len
+        )
+
+        ## keep the mu and sigma within (-50, +50)
+        Zsent_distribution[0] = tf.clip_by_value(Zsent_distribution[0], -50, 50)
+        Zsent_distribution[1] = tf.clip_by_value(Zsent_distribution[1], -50, 50)
+        Zglobal_distribition[0] = tf.clip_by_value(
+            Zglobal_distribition[0], -50, 50
+        )
+        Zglobal_distribition[1] = tf.clip_by_value(
+            Zglobal_distribition[1], -50, 50
+        )
+        Zsent_dec_distribution[0] = tf.clip_by_value(
+            Zsent_dec_distribution[0], -50, 50
+        )
+        Zsent_dec_distribution[1] = tf.clip_by_value(
+            Zsent_dec_distribution[1], -50, 50
         )
 
         neg_kld_zsent = -1 * tf.reduce_mean(
@@ -175,6 +166,8 @@ def main(params):
                 axis=1
             )
         )
+        # neg_kld_zsent = tf.placeholder(tf.float64)
+        neg_kld_zsent = tf.clip_by_value(neg_kld_zsent, -20000, 20000)
         neg_kld_zglobal = -1 * tf.reduce_mean(
             tf.reduce_sum(
                 kld(
@@ -198,7 +191,7 @@ def main(params):
             l_masked_losses, reduction_indices=1
         ) / d_seq_length
         label_rec_loss = tf.reduce_mean(l_mean_loss_by_example)
-        label_perplexity = tf.exp(label_rec_loss)
+        # label_perplexity = tf.exp(label_rec_loss)
 
         # Word reconstruction loss
         # print(word_logits.shape)
@@ -215,7 +208,7 @@ def main(params):
             w_masked_losses, reduction_indices=1
         ) / d_seq_length
         word_rec_loss = tf.reduce_mean(w_mean_loss_by_example)
-        word_perplexity = tf.exp(word_rec_loss)
+        # word_perplexity = tf.exp(word_rec_loss)
 
         rec_loss = word_rec_loss + label_rec_loss
 
@@ -228,17 +221,18 @@ def main(params):
         #    tf.cast(annealing, dtype=tf.float64), tf.cast(kld_loss, dtype=tf.float64))
 
         alpha = tf.placeholder(tf.float64)
-        alpha_val = tf.to_float(alpha)
+        # alpha_val = tf.to_float(alpha)
         beta = tf.placeholder(tf.float64)
-        beta_val = tf.to_float(beta)
-        kl_term_weight = tf.multiply(tf.cast(alpha_val, dtype=tf.float64), tf.cast(neg_kld_zsent, dtype=tf.float64)) \
-                         + tf.multiply(tf.cast(beta_val, dtype=tf.float64), tf.cast(neg_kld_zglobal, dtype=tf.float64))
+        # beta_val = tf.to_float(beta)
+        kl_term_weight = tf.multiply(tf.cast(alpha, dtype=tf.float64), tf.cast(neg_kld_zsent, dtype=tf.float64)) \
+                         + tf.multiply(tf.cast(beta, dtype=tf.float64), tf.cast(neg_kld_zglobal, dtype=tf.float64))
 
         total_lower_bound = rec_loss - kl_term_weight
 
         gradients = tf.gradients(total_lower_bound, tf.trainable_variables())
-        opt = tf.train.AdamOptimizer(learning_rate=params.learning_rate)
         clipped_grad, _ = tf.clip_by_global_norm(gradients, 5)
+        opt = tf.train.AdamOptimizer(learning_rate=params.learning_rate)
+        # optimize = opt.apply_gradients(zip(gradients, tf.trainable_variables()))
         optimize = opt.apply_gradients(
             zip(clipped_grad, tf.trainable_variables())
         )
@@ -254,34 +248,44 @@ def main(params):
                 ]
             )
 
-            # try:
+            ## save the values weights are initialized by
+            with tf.variable_scope("", reuse=True):
+                vars_to_save = [
+                    'encoder/zsent_enc_gauss/mu/weights',
+                    'encoder/zsent_enc_gauss/logvar/weights',
+                    'encoder/zglobal_enc_gauss/mu/weights',
+                    'encoder/zglobal_enc_gauss/logvar/weights',
+                    'zsent_dec_gauss/mu/weights',
+                    'zsent_dec_gauss/logvar/weights'
+                ]
+                for vts in vars_to_save:
+                    vts_val = tf.get_variable(vts, dtype=tf.float64).eval()
+                    np.savetxt('values/' + vts.replace('/', '_'), vts_val)
 
-            #     path="./models_ckpts_"+params.name+"/vae_lstm_model-11900"
-            #     # print(path)
+            # ## Load saved state
+            # try:
+            #     path = os.path.join(params.MODEL_DIR, "vae_lstm_model-20600")
+            #     print("Loading state from:",path)
             #     # chkp.print_tensors_in_checkpoint_file(path, tensor_name='', all_tensors=True)
-            #     saver.restore(sess,path )
-            # # saver.restore(sess, "./models_ckpts_1/vae_lstm_model-258600")
+            #     saver.restore(sess, path)
             # except:
             #     print("-----exception occurred--------")
             #     exit()
             #     # traceback.print_exc()
-
-            # print("Model Restored")
+            # print("*******Model Restored*******")
 
             total_parameters = 0
             #print_vars("trainable variables")
-            for variable in tf.trainable_variables():
+            for i, variable in enumerate(tf.trainable_variables()):
                 # shape is an array of tf.Dimension
                 shape = variable.get_shape()
-                print(shape, variable.name)
-                # print(len(shape))
+                print('{} {} {}'.format(i, variable.name, shape))
                 variable_parameters = 1
                 for dim in shape:
-                    print(dim)
                     variable_parameters *= dim.value
-                print(variable_parameters, total_parameters)
                 total_parameters += variable_parameters
-            print(total_parameters)
+            print("Total params:", total_parameters)
+            print("#Operations:", len(graph.get_operations()))
 
             # exit()
             if params.debug:
@@ -291,123 +295,148 @@ def main(params):
             #ptb_data = PTBInput(params.batch_size, train_data)
             num_iters = len(word_data) // params.batch_size
             cur_it = 0
-            iters, tlb_arr, wppl_arr, klw_arr, kld_zg_arr, kld_zs_arr = [], [], [], [], [], []
+            iters, tlb_arr, klw_arr, kld_zg_arr, kld_zs_arr = [], [], [], [], []
             alpha_arr, beta_arr = [], []
+            # wppl_arr = []
+
+            ## for debugging
+            # file_idx = -1
+            # np.set_printoptions(linewidth=np.inf)
+            # logger = logging.getLogger()
+            # logger.setLevel(logging.DEBUG)
+            # ch = RotatingFileHandler(
+            #     'values/log', maxBytes=5 * 1024 * 1024 * 1024, backupCount=1
+            # )
+            # ch.setLevel(logging.DEBUG)
+            # # create formatter
+            # formatter = logging.Formatter('%(message)s')
+            # ch.setFormatter(formatter)
+            # logger.addHandler(ch)
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
                 print("Epoch: {} started at: {}".format(e, epoch_start_time))
                 total_tlb = 0
-                total_wppl = 0
+                # total_wppl = 0
                 total_klw = 0
                 total_kld_zg = 0
                 total_kld_zs = 0
+
+                ## alpha, beta schedule
+                alpha_v = beta_v = 0
+                if e > 2000:
+                    alpha_v = beta_v = min(1, float(e) / 5000 - 0.4)
+
                 for it in tqdm(range(num_iters)):
                     params.is_training = True
-
-                    sent_batch = word_data[it * params.batch_size:(it + 1) *
-                                           params.batch_size]
-                    label_batch = label_data[it * params.batch_size:(it + 1) *
-                                             params.batch_size]
-
-                    sent_dec_l_batch = word_labels_arr[it * params.batch_size:
-                                                       (it + 1) *
-                                                       params.batch_size]
-
-                    sent_l_batch = encoder_word_data[it *
-                                                     params.batch_size:(it +
-                                                                        1) *
-                                                     params.batch_size]
-                    label_l_batch = label_labels_arr[it *
-                                                     params.batch_size:(it +
-                                                                        1) *
-                                                     params.batch_size]
+                    start_idx = it * params.batch_size
+                    end_idx = (it + 1) * params.batch_size
 
                     # zero padding
-                    # pad = len(max(sent_batch, key=len))
                     pad = max_sent_len
+
+                    sent_batch = word_data[start_idx:end_idx]
+                    label_batch = label_data[start_idx:end_idx]
+                    sent_dec_l_batch = word_labels_arr[start_idx:end_idx]
+                    sent_l_batch = encoder_word_data[start_idx:end_idx]
+                    label_l_batch = label_labels_arr[start_idx:end_idx]
+
                     # not optimal!!
                     length_ = np.array([len(sent) for sent in sent_batch]
                                        ).reshape(params.batch_size)
+
                     # prepare encoder and decoder inputs to feed
-                    sent_batch = np.array(
-                        [sent + [0] * (pad - len(sent)) for sent in sent_batch]
-                    )
-                    label_batch = np.array(
-                        [
-                            sent + [0] * (pad - len(sent))
-                            for sent in label_batch
-                        ]
-                    )
+                    sent_batch = zero_pad(sent_batch, pad)
+                    label_batch = zero_pad(label_batch, pad)
+                    sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
+                    sent_l_batch = zero_pad(sent_l_batch, pad)
+                    label_l_batch = zero_pad(label_l_batch, pad)
 
-                    sent_dec_l_batch = np.array(
-                        [
-                            (sent + [0] * (pad - len(sent)))
-                            for sent in sent_dec_l_batch
-                        ]
-                    )
-
-                    sent_l_batch = np.array(
-                        [
-                            (sent + [0] * (pad - len(sent)))
-                            for sent in sent_l_batch
-                        ]
-                    )
-                    label_l_batch = np.array(
-                        [
-                            (sent + [0] * (pad - len(sent)))
-                            for sent in label_l_batch
-                        ]
-                    )
-
-                    alpha_v = beta_v = 0
-                    if e > 2000:
-                        alpha_v = beta_v = float(e) / 5000 - 0.4
                     feed = {
                         word_inputs: sent_l_batch,
                         label_inputs: label_l_batch,
-                        d_word_inputs: sent_batch,
-                        d_label_inputs: label_batch,
                         d_word_labels: sent_dec_l_batch,
                         d_label_labels: label_l_batch,
-                        seq_length: length_,
                         d_seq_length: length_,
                         alpha: alpha_v,
                         beta: beta_v
                     }
 
-                    z1a, z1b, z3a, z3b, kzg, kzs, tlb, wppl, lppl, klw, o, alpha_, beta_ = sess.run(
+                    ## for debugging
+                    # z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, alpha_, beta_, grads_, lce, wce, l_logits, w_logits, zs_state, zg_state = sess.run(
+                    #     [
+                    #         Zsent_distribution[0], Zsent_distribution[1],
+                    #         Zsent_dec_distribution[0],
+                    #         Zsent_dec_distribution[1], neg_kld_zglobal,
+                    #         neg_kld_zsent, total_lower_bound, kl_term_weight,
+                    #         alpha, beta, gradients, l_cross_entr, w_cross_entr,
+                    #         label_logits, word_logits, zsent_state,
+                    #         zglobal_state
+                    #     ],
+                    #     feed_dict=feed
+                    # )
+
+                    # file_idx += 1
+                    # file_idx %= 5
+                    # file_idx_s = str(file_idx)
+
+                    # for i, x in enumerate(grads_):
+                    #     np.savetxt(
+                    #         'values/{:02d}_grads_{}'.format(i, file_idx),
+                    #         x,
+                    #         delimiter=','
+                    #     )
+                    # np.savetxt(
+                    #     'values/label_cross_entropy_' + file_idx_s,
+                    #     lce,
+                    #     delimiter=','
+                    # )
+                    # np.savetxt(
+                    #     'values/word_cross_entropy_' + file_idx_s,
+                    #     wce,
+                    #     delimiter=','
+                    # )
+                    # with open('values/vals_' + file_idx_s, 'w') as oof:
+                    #     oof.write('\n'.join(map(str, [kzg, kzs, tlb])))
+                    # with open('values/sent_idx_' + file_idx_s, 'w') as oof:
+                    #     oof.write(str(start_idx) + '\n' + str(end_idx))
+
+                    # np.savetxt('values/zs_mu_' + file_idx_s, z1a)
+                    # np.savetxt('values/zs_logvar_' + file_idx_s, z1b)
+                    # np.savetxt('values/zs_dec_mu_' + file_idx_s, z3a)
+                    # np.savetxt('values/zs_dec_logvar_' + file_idx_s, z3b)
+                    # np.savetxt('values/zs_state_' + file_idx_s, zs_state)
+                    # np.savetxt('values/zg_state_' + file_idx_s, zg_state)
+                    # np.savetxt('values/word_logits_' + file_idx_s, w_logits)
+                    # np.savetxt('values/label_logits_' + file_idx_s, l_logits)
+
+                    # logger.info('zs_mu %s', z1a.tolist())
+                    # logger.info('zs_logvar %s', z1b.tolist())
+                    # logger.info('zs_dec_mu %s', z3a.tolist())
+                    # logger.info('zs_dec_logvar %s', z3b.tolist())
+                    # logger.info('zs_state %s', zs_state.tolist())
+                    # logger.info('zg_state %s', zg_state.tolist())
+                    # logger.info('w_logits %s', w_logits.tolist())
+                    # logger.info('l_logits %s', l_logits.tolist())
+
+                    z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, o, alpha_, beta_, clipped_grads_ = sess.run(
                         [
                             Zsent_distribution[0], Zsent_distribution[1],
                             Zsent_dec_distribution[0],
                             Zsent_dec_distribution[1], neg_kld_zglobal,
-                            neg_kld_zsent, total_lower_bound, word_perplexity,
-                            label_perplexity, kl_term_weight, optimize,
-                            alpha_val, beta_val
+                            neg_kld_zsent, total_lower_bound, kl_term_weight,
+                            optimize, alpha, beta, clipped_grad
                         ],
                         feed_dict=feed
                     )
 
-                    # print(c.shape)
-                    # print(d.shape)
-                    # print(c,d)
-                    # print(e,f)
-                    # print(d[69],d[119])
-                    ##print('zsent', z1a, z1b)
-                    # print('zglobal',z2a,z2b)
-                    ##print('zsent dec', z3a, z3b)
-                    # if cur_it % 100 == 0 and cur_it != 0:
-                    #     print("TotalLB after {} ({}) iterations (epoch): {} Neg_KLD_Zglobal: "
-                    #           "{} Neg_KLD_Zsent: {}".format(
-                    #               cur_it, e, tlb, kzg, kzs))
-                    #     print(
-                    #         "Word Perplexity: {}, Label Perplexity: {}".format(wppl, lppl))
+                    # for i, x in enumerate(clipped_grads_):
+                    #     np.savetxt(
+                    #         'values/{:02d}_clipped'.format(i), x, delimiter=','
+                    #     )
 
                     cur_it += 1
-                    # iters.append(cur_it)
-                    # tlb_arr.append(tlb)
-                    # wppl_arr.append(wppl)
                     total_tlb += tlb
-                    total_wppl += wppl
+                    # total_wppl += wppl
                     total_klw += klw
                     total_kld_zg += -kzg
                     total_kld_zs += -kzs
@@ -422,14 +451,14 @@ def main(params):
                         # print(model_path_name)
 
                 avg_tlb = total_tlb / num_iters
-                avg_wppl = total_wppl / num_iters
+                # avg_wppl = total_wppl / num_iters
                 avg_klw = total_klw / num_iters
                 avg_kld_zg = total_kld_zg / num_iters
                 avg_kld_zs = total_kld_zs / num_iters
 
                 iters.append(e)
                 tlb_arr.append(avg_tlb)
-                wppl_arr.append(avg_wppl)
+                # wppl_arr.append(avg_wppl)
                 klw_arr.append(avg_klw)
                 kld_zg_arr.append(avg_kld_zg)
                 kld_zs_arr.append(avg_kld_zs)
@@ -438,83 +467,11 @@ def main(params):
 
                 print("Time Taken:", datetime.datetime.now() - epoch_start_time)
 
-            import matplotlib as mpl
-            mpl.use('Agg')
-            import matplotlib.pyplot as plt
-            plot_filename = "./plot_values_" + str(params.num_epochs) + ".txt"
-            with open(plot_filename, 'w') as wf:
-                _ = [wf.write(str(s) + ' ') for s in iters]
-                wf.write('\n')
-                _ = [wf.write(str(s) + ' ') for s in tlb_arr]
-                # wf.write('\n')
-                # _ = [wf.write(str(s) + ' ') for s in wppl_arr]
-                wf.write('\n')
-                _ = [wf.write(str(s) + ' ') for s in klw_arr]
-                wf.write('\n')
-                _ = [wf.write(str(s) + ' ') for s in kld_zg_arr]
-                wf.write('\n')
-                _ = [wf.write(str(s) + ' ') for s in kld_zs_arr]
-                wf.write('\n')
-                _ = [wf.write(str(s) + ' ') for s in alpha_arr]
-                wf.write('\n')
-                _ = [wf.write(str(s) + ' ') for s in beta_arr]
-
-            plt.plot(iters, tlb_arr, color='blue', label='Total lower bound')
-            plt.title("Total Lower Bound vs Epochs")
-            plt.xlabel('Epochs')
-            plt.ylabel('Total Lower Bound')
-            plt.savefig(
-                './graph_elbo_epochs_' + str(params.num_epochs) + '.png'
-            )
-            plt.clf()
-
-            # plt.plot(iters, wppl_arr, color='red', label='Word Perplexity')
-            # plt.title("Word Perplexity vs Epochs")
-            # plt.xlabel('Epochs')
-            # plt.ylabel('Word Perplexity')
-            # plt.savefig('./graph_ppl_epochs_'+str(params.num_epochs)+'.png')
-
-            # plt.legend(bbox_to_anchor=(1.05, 1),
-            #           loc=1, borderaxespad=0.)
-            # plt.clf()
-
-            plt.plot(iters, klw_arr, color='green', label='KL term Value')
-            plt.title("KL Term Value vs Epochs")
-            plt.xlabel('Epochs')
-            plt.ylabel('KL term Value')
-            plt.savefig('./graph_klw_epochs_' + str(params.num_epochs) + '.png')
-            plt.clf()
-
-            plt.plot(iters, kld_zg_arr, color='yellow', label='kld_zg')
-            plt.title("KLD zg")
-            plt.xlabel('Epochs')
-            plt.ylabel('KLD zg term Value')
-            plt.savefig(
-                './graph_kld_zg_epochs_' + str(params.num_epochs) + '.png'
-            )
-            plt.clf()
-
-            plt.plot(iters, kld_zs_arr, color='black', label='kld_zs')
-            plt.title("KLD zs")
-            plt.xlabel('Epochs')
-            plt.ylabel('KLD zs term Value')
-            plt.savefig(
-                './graph_kld_zs_epochs_' + str(params.num_epochs) + '.png'
-            )
-            plt.clf()
-
-            plt.plot(iters, alpha_arr, color='blue', label='alpha')
-            plt.title("Alpha")
-            plt.xlabel('Epochs')
-            plt.ylabel('Alpha Value')
-            plt.savefig(
-                './graph_alpha_epochs_' + str(params.num_epochs) + '.png'
-            )
-            plt.clf()
-
-            # figure_name = './graph_epochs_'+str(params.num_epochs)+'.png'
-            # # plt.plot(iters, coeff, 'r--', label='annealing')
-            # plt.savefig(figure_name)
+                plot_filename = "./plot_values_{}.txt".format(params.num_epochs)
+                write_lists_to_file(
+                    plot_filename, iters, tlb_arr, klw_arr, kld_zg_arr,
+                    kld_zs_arr, alpha_arr, beta_arr
+                )
 
 
 if __name__ == "__main__":

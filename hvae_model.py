@@ -146,7 +146,7 @@ def zsent_encoder(encoder_input, seq_len, batch_size):
     return final_state
 
 
-def encoder_model(word_input, label_input, seq_len, batch_size, max_sent_len):
+def encoder_model(word_input, label_input, batch_size, max_sent_len):
 
     ## LSTM cells
     word_cell = tf.contrib.rnn.LSTMCell(
@@ -177,10 +177,10 @@ def encoder_model(word_input, label_input, seq_len, batch_size, max_sent_len):
     return word_cell_state, label_cell_state
 
 
-def encoder(encoder_input, label_input, seq_len, batch_size, max_sent_len):
+def encoder(encoder_input, label_input, batch_size, max_sent_len):
     with tf.variable_scope("encoder"):
         zsent_pre_out, zglobal_pre_out = encoder_model(
-            encoder_input, label_input, seq_len, batch_size, max_sent_len
+            encoder_input, label_input, batch_size, max_sent_len
         )
 
         zsent_mu, zsent_logvar, zsent_sample = gauss_layer(
@@ -188,12 +188,13 @@ def encoder(encoder_input, label_input, seq_len, batch_size, max_sent_len):
         )
         Zsent_distribution = [zsent_mu, zsent_logvar]
 
+        gauss_input = tf.concat([zglobal_pre_out, zsent_sample], -1)
         zglobal_mu, zglobal_logvar, zglobal_sample = gauss_layer(
-            zglobal_pre_out, params.latent_size, scope="zglobal_enc_gauss"
+            gauss_input, params.latent_size, scope="zglobal_enc_gauss"
         )
         Zglobal_distribition = [zglobal_mu, zglobal_logvar]
 
-    return Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample
+    return Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_pre_out, zglobal_pre_out
 
 
 def lstm_decoder_labels(
@@ -422,9 +423,7 @@ def lstm_decoder_words(
 def decoder_model(
     zl,
     zc,
-    seq_len,
     batch_size,
-    label_embed,
     label_vocab_size,
     word_vocab_size,
     max_sent_len,
@@ -499,12 +498,7 @@ def decoder_model(
 
 def decoder(
     zglobal_sample,
-    d_word_input,
-    d_labels,
-    seq_length,
     batch_size,
-    label_embed,
-    word_embed,
     word_vocab_size,
     label_vocab_size,
     max_sent_len,
@@ -521,13 +515,10 @@ def decoder(
     zsent_dec_distribution = [zsent_dec_mu, zsent_dec_logvar]
 
     Zglobal_dec_distribution = [0., np.log(1.0**2).astype(np.float64)]
-    ## not giving 'd_labels' as input
     word_logits, label_logits, w_sample, l_sample = decoder_model(
         zglobal_sample,
         zsent_dec_sample,
-        seq_length,
         batch_size,
-        label_embed,
         label_vocab_size,
         word_vocab_size,
         max_sent_len,

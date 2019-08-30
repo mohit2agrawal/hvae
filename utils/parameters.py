@@ -2,7 +2,8 @@ class Parameters():
     # general parameters
     anneal_value = 1
     debug = True
-    name = "rVACS_kl"
+    # name = "rVACS_kl"
+    name = "ptb"
     number_of_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 10
@@ -41,8 +42,8 @@ class Parameters():
     fine_tune_embed = False
     # technical parameters
     is_training = True
-    LOG_DIR = './model_logs_'+name+"/"
-    MODEL_DIR = './models_ckpts_'+name+"/"
+    LOG_DIR = './model_logs_' + name + "/"
+    MODEL_DIR = './models_ckpts_' + name + "/"
     visualise = False
     # gru base cell partially implemented
     base_cell = 'lstm'  # or GRU
@@ -52,30 +53,64 @@ class Parameters():
         import os
         parser = argparse.ArgumentParser(
             description="Specify some parameters, all parameters "
-            "also can be directly specified in Parameters class")
-        parser.add_argument('--dataset', default=self.input_,
-                            help='training dataset (GOT or PTB)', dest='data')
-        parser.add_argument('--lr', default=self.learning_rate,
-                            help='learning rate', dest='lr')
-        parser.add_argument('--embed_dim', default=self.embed_size,
-                            help='embedding size', dest='embed')
-        parser.add_argument('--lst_state_dim_enc', default=self.encoder_hidden,
-                            help='encoder state size', dest='enc_hid')
-        parser.add_argument('--lst_state_dim_dec', default=self.decoder_hidden,
-                            help='decoder state size', dest='dec_hid')
-        parser.add_argument('--latent', default=self.latent_size,
-                            help='latent space size', dest='latent')
-        parser.add_argument('--dec_dropout', default=self.dec_keep_rate,
-                            help='decoder dropout keep rate', dest='dec_drop')
-        parser.add_argument('--beam_search', default=self.beam_search,
-                            action="store_true")
+            "also can be directly specified in Parameters class"
+        )
+        parser.add_argument(
+            '--dataset',
+            default=self.input_,
+            help='training dataset (GOT or PTB)',
+            dest='data'
+        )
+        parser.add_argument(
+            '--lr', default=self.learning_rate, help='learning rate', dest='lr'
+        )
+        parser.add_argument(
+            '--embed_dim',
+            default=self.embed_size,
+            help='embedding size',
+            dest='embed'
+        )
+        parser.add_argument(
+            '--lst_state_dim_enc',
+            default=self.encoder_hidden,
+            help='encoder state size',
+            dest='enc_hid'
+        )
+        parser.add_argument(
+            '--lst_state_dim_dec',
+            default=self.decoder_hidden,
+            help='decoder state size',
+            dest='dec_hid'
+        )
+        parser.add_argument(
+            '--latent',
+            default=self.latent_size,
+            help='latent space size',
+            dest='latent'
+        )
+        parser.add_argument(
+            '--dec_dropout',
+            default=self.dec_keep_rate,
+            help='decoder dropout keep rate',
+            dest='dec_drop'
+        )
+        parser.add_argument(
+            '--beam_search', default=self.beam_search, action="store_true"
+        )
         parser.add_argument('--beam_size', default=self.beam_size)
-        parser.add_argument('--decode', default=self.decode,
-                            help='define mapping from z->lstm. mlp, concat, hw')
-        parser.add_argument('--encode', default=self.encode,
-                            help='define mapping from lstm->z. mlp, hw')
-        parser.add_argument('--vocab_drop', default=self.vocab_drop,
-                            help='drop less than')
+        parser.add_argument(
+            '--decode',
+            default=self.decode,
+            help='define mapping from z->lstm. mlp, concat, hw'
+        )
+        parser.add_argument(
+            '--encode',
+            default=self.encode,
+            help='define mapping from lstm->z. mlp, hw'
+        )
+        parser.add_argument(
+            '--vocab_drop', default=self.vocab_drop, help='drop less than'
+        )
         parser.add_argument('--gpu', default="0", help="specify GPU number")
 
         args = parser.parse_args()

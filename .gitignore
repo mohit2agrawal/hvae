@@ -5,3 +5,7 @@ backup
 model_logs*
 models_ckpts*
 trained_embeddings*
+values
+graph*
+*.txt
+*.vec
