@@ -7,8 +7,8 @@ class Parameters():
     number_of_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 10
-    num_epochs = 10000
-    learning_rate = 0.001
+    num_epochs = 2000
+    learning_rate = 0.0001
     batch_size = 32
     # for decoding
     temperature = 1.0
@@ -127,5 +127,5 @@ class Parameters():
         self.encode = args.encode
         self.vocab_drop = int(args.vocab_drop)
         # uncomment to make it GPU
-        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+        # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        # os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu

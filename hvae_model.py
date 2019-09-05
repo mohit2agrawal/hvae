@@ -53,6 +53,10 @@ def gauss_layer(inp, dim, mu_nl=None, logvar_nl=None, scope=None):
             biases_initializer=tf.zeros_initializer(),
             scope="logvar"
         )
+
+        mu = tf.clip_by_value(mu, -50, 50)
+        logvar = tf.clip_by_value(logvar, -50, 50)
+
         eps = tf.random_normal(tf.shape(logvar), name='eps', dtype=tf.float64)
         sample = mu + tf.exp(0.5 * logvar) * eps
     return mu, logvar, sample
@@ -428,72 +432,75 @@ def decoder_model(
     word_vocab_size,
     max_sent_len,
     gen_mode=False,
-    scope=None
 ):
-    with tf.variable_scope(scope, "decoder") as sc:
-        ## the two LSTM cells
-        label_cell = tf.contrib.rnn.LSTMCell(
-            params.decoder_hidden, dtype=tf.float64, state_is_tuple=False
+    ## the two LSTM cells
+    label_cell = tf.contrib.rnn.LSTMCell(
+        params.decoder_hidden, dtype=tf.float64, state_is_tuple=False
+    )
+    word_cell = tf.contrib.rnn.LSTMCell(
+        params.decoder_hidden, dtype=tf.float64, state_is_tuple=False
+    )
+
+    ## Fully Connected layers for logits
+    label_dense_layer = tf.layers.Dense(label_vocab_size, activation=None)
+    word_dense_layer = tf.layers.Dense(word_vocab_size, activation=None)
+
+    ## zero initial state
+    label_cell_state = rnn_placeholders(
+        label_cell.zero_state(batch_size, tf.float64)
+    )
+    word_cell_state = rnn_placeholders(
+        word_cell.zero_state(batch_size, tf.float64)
+    )
+
+    ## initial input to label LSTM, concat(zl, zero word state)
+    label_cell_input = tf.concat([zl, word_cell_state], -1)
+
+    word_logits_arr = []
+    label_logits_arr = []
+    word_state_arr = []
+    label_state_arr = []
+    ## compute the LSTM outputs
+    for i in range(max_sent_len):
+        ## run the label decoder LSTM
+        label_cell_output, label_cell_state = label_cell(
+            label_cell_input, label_cell_state
         )
-        word_cell = tf.contrib.rnn.LSTMCell(
-            params.decoder_hidden, dtype=tf.float64, state_is_tuple=False
+        ## get the label logits
+        label_logits = label_dense_layer(label_cell_output)
+        label_logits_softmax = tf.nn.softmax(label_logits)
+        label_logits_arr.append(label_logits)
+        label_state_arr.append(label_cell_state)
+
+        ## concat zc and label logits and run the word decoder LSTM
+        word_cell_input = tf.concat([zc, label_logits_softmax], axis=-1)
+        word_cell_output, word_cell_state = word_cell(
+            word_cell_input, word_cell_state
         )
 
-        ## Fully Connected layers for logits
-        label_dense_layer = tf.layers.Dense(label_vocab_size, activation=None)
-        word_dense_layer = tf.layers.Dense(word_vocab_size, activation=None)
+        ## input for the label decoder LSTM for next time step
+        label_cell_input = tf.concat([zl, word_cell_state], axis=-1)
 
-        ## zero initial state
-        label_cell_state = rnn_placeholders(
-            label_cell.zero_state(batch_size, tf.float64)
-        )
-        word_cell_state = rnn_placeholders(
-            word_cell.zero_state(batch_size, tf.float64)
-        )
+        ## get word logits
+        word_logits = word_dense_layer(word_cell_output)
+        word_logits_arr.append(word_logits)
+        word_state_arr.append(word_cell_state)
 
-        ## initial input to label LSTM, concat(zl, zero word state)
-        label_cell_input = tf.concat([zl, word_cell_state], -1)
+    word_logits_all = tf.concat(word_logits_arr, axis=0)
+    word_state_all = tf.concat(word_state_arr, axis=0)
+    label_logits_all = tf.concat(label_logits_arr, axis=0)
+    label_state_all = tf.concat(label_state_arr, axis=0)
 
-        word_logits_arr = []
-        label_logits_arr = []
-        ## compute the LSTM outputs
-        for i in range(max_sent_len):
-            ## run the label decoder LSTM
-            label_cell_output, label_cell_state = label_cell(
-                label_cell_input, label_cell_state
-            )
-            ## get the label logits
-            label_logits = label_dense_layer(label_cell_output)
-            label_logits_softmax = tf.nn.softmax(label_logits)
-            label_logits_arr.append(label_logits)
-
-            ## concat zc and label logits and run the word decoder LSTM
-            word_cell_input = tf.concat([zc, label_logits_softmax], axis=-1)
-            word_cell_output, word_cell_state = word_cell(
-                word_cell_input, word_cell_state
-            )
-
-            ## input for the label decoder LSTM for next time step
-            label_cell_input = tf.concat([zl, word_cell_state], axis=-1)
-
-            ## get word logits
-            word_logits = word_dense_layer(word_cell_output)
-            word_logits_arr.append(word_logits)
-
-        word_logits_all = tf.concat(word_logits_arr, axis=0)
-        label_logits_all = tf.concat(label_logits_arr, axis=0)
-
-        if params.beam_search:
-            word_sample = tf.nn.softmax(word_logits_all)
-            label_sample = tf.nn.softmax(label_logits_all)
-        else:
-            word_sample = tf.multinomial(
-                word_logits_all / params.temperature, 10
-            )[0]
-            label_sample = tf.multinomial(
-                label_logits_all / params.temperature, 10
-            )[0]
-        return word_logits_all, label_logits_all, word_sample, label_sample
+    if params.beam_search:
+        word_sample = tf.nn.softmax(word_logits_all)
+        label_sample = tf.nn.softmax(label_logits_all)
+    else:
+        word_sample = tf.multinomial(word_logits_all / params.temperature,
+                                     10)[0]
+        label_sample = tf.multinomial(
+            label_logits_all / params.temperature, 10
+        )[0]
+    return word_logits_all, label_logits_all, word_sample, label_sample, word_state_all, label_state_all
 
 
 def decoder(
@@ -508,22 +515,22 @@ def decoder(
 ):
     ##TODO: write code for gen_mode=True
 
-    ## compute zc
-    zsent_dec_mu, zsent_dec_logvar, zsent_dec_sample = gauss_layer(
-        zglobal_sample, params.latent_size, scope="zsent_dec_gauss"
-    )
-    zsent_dec_distribution = [zsent_dec_mu, zsent_dec_logvar]
+    with tf.variable_scope("decoder") as sc:
+        ## compute zc
+        zsent_dec_mu, zsent_dec_logvar, zsent_dec_sample = gauss_layer(
+            zglobal_sample, params.latent_size, scope="zsent_dec_gauss"
+        )
+        zsent_dec_distribution = [zsent_dec_mu, zsent_dec_logvar]
 
-    Zglobal_dec_distribution = [0., np.log(1.0**2).astype(np.float64)]
-    word_logits, label_logits, w_sample, l_sample = decoder_model(
-        zglobal_sample,
-        zsent_dec_sample,
-        batch_size,
-        label_vocab_size,
-        word_vocab_size,
-        max_sent_len,
-        gen_mode,
-        scope="decoder_model_rnn",
-    )
+        Zglobal_dec_distribution = [0., np.log(1.0**2).astype(np.float64)]
+        word_logits, label_logits, w_sample, l_sample, w_cell_state, l_cell_state = decoder_model(
+            zglobal_sample,
+            zsent_dec_sample,
+            batch_size,
+            label_vocab_size,
+            word_vocab_size,
+            max_sent_len,
+            gen_mode,
+        )
 
-    return word_logits, label_logits, zsent_dec_distribution, Zglobal_dec_distribution, l_sample, w_sample, zsent_dec_sample
+    return word_logits, label_logits, zsent_dec_distribution, Zglobal_dec_distribution, l_sample, w_sample, zsent_dec_sample, w_cell_state, l_cell_state

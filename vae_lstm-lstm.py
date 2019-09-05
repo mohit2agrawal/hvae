@@ -136,25 +136,9 @@ def main(params):
         Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
             vect_inputs, label_inputs_1, params.batch_size, max_sent_len
         )
-        word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _ = decoder(
+        word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _, dec_word_states, dec_label_states = decoder(
             zglobal_sample, params.batch_size, word_vocab_size,
             label_vocab_size, max_sent_len
-        )
-
-        ## keep the mu and sigma within (-50, +50)
-        Zsent_distribution[0] = tf.clip_by_value(Zsent_distribution[0], -50, 50)
-        Zsent_distribution[1] = tf.clip_by_value(Zsent_distribution[1], -50, 50)
-        Zglobal_distribition[0] = tf.clip_by_value(
-            Zglobal_distribition[0], -50, 50
-        )
-        Zglobal_distribition[1] = tf.clip_by_value(
-            Zglobal_distribition[1], -50, 50
-        )
-        Zsent_dec_distribution[0] = tf.clip_by_value(
-            Zsent_dec_distribution[0], -50, 50
-        )
-        Zsent_dec_distribution[1] = tf.clip_by_value(
-            Zsent_dec_distribution[1], -50, 50
         )
 
         neg_kld_zsent = -1 * tf.reduce_mean(
@@ -224,10 +208,10 @@ def main(params):
         # alpha_val = tf.to_float(alpha)
         beta = tf.placeholder(tf.float64)
         # beta_val = tf.to_float(beta)
-        kl_term_weight = tf.multiply(tf.cast(alpha, dtype=tf.float64), tf.cast(neg_kld_zsent, dtype=tf.float64)) \
-                         + tf.multiply(tf.cast(beta, dtype=tf.float64), tf.cast(neg_kld_zglobal, dtype=tf.float64))
+        kl_term_weight = - tf.multiply(tf.cast(alpha, dtype=tf.float64), tf.cast(neg_kld_zsent, dtype=tf.float64)) \
+                         - tf.multiply(tf.cast(beta, dtype=tf.float64), tf.cast(neg_kld_zglobal, dtype=tf.float64))
 
-        total_lower_bound = rec_loss - kl_term_weight
+        total_lower_bound = rec_loss + kl_term_weight
 
         gradients = tf.gradients(total_lower_bound, tf.trainable_variables())
         clipped_grad, _ = tf.clip_by_global_norm(gradients, 5)
@@ -238,8 +222,8 @@ def main(params):
         )
 
         saver = tf.train.Saver(max_to_keep=10)
-
-        with tf.Session() as sess:
+        config = tf.ConfigProto(device_count={'GPU': 0})
+        with tf.Session(config=config) as sess:
             print("*********")
             sess.run(
                 [
@@ -249,23 +233,23 @@ def main(params):
             )
 
             ## save the values weights are initialized by
-            with tf.variable_scope("", reuse=True):
-                vars_to_save = [
-                    'encoder/zsent_enc_gauss/mu/weights',
-                    'encoder/zsent_enc_gauss/logvar/weights',
-                    'encoder/zglobal_enc_gauss/mu/weights',
-                    'encoder/zglobal_enc_gauss/logvar/weights',
-                    'zsent_dec_gauss/mu/weights',
-                    'zsent_dec_gauss/logvar/weights'
-                ]
-                for vts in vars_to_save:
-                    vts_val = tf.get_variable(vts, dtype=tf.float64).eval()
-                    np.savetxt('values/' + vts.replace('/', '_'), vts_val)
+            # with tf.variable_scope("", reuse=True):
+            #     vars_to_save = [
+            #         'encoder/zsent_enc_gauss/mu/weights',
+            #         'encoder/zsent_enc_gauss/logvar/weights',
+            #         'encoder/zglobal_enc_gauss/mu/weights',
+            #         'encoder/zglobal_enc_gauss/logvar/weights',
+            #         'zsent_dec_gauss/mu/weights',
+            #         'zsent_dec_gauss/logvar/weights'
+            #     ]
+            #     for vts in vars_to_save:
+            #         vts_val = tf.get_variable(vts, dtype=tf.float64).eval()
+            #         np.savetxt('values/' + vts.replace('/', '_'), vts_val)
 
-            # ## Load saved state
+            ## Load saved state
             # try:
-            #     path = os.path.join(params.MODEL_DIR, "vae_lstm_model-20600")
-            #     print("Loading state from:",path)
+            #     path = os.path.join(params.MODEL_DIR, "vae_lstm_model-10700")
+            #     print("***Loading state from:",path)
             #     # chkp.print_tensors_in_checkpoint_file(path, tensor_name='', all_tensors=True)
             #     saver.restore(sess, path)
             # except:
@@ -299,8 +283,10 @@ def main(params):
             alpha_arr, beta_arr = [], []
             # wppl_arr = []
 
+            all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
+
             ## for debugging
-            # file_idx = -1
+            file_idx = -1
             # np.set_printoptions(linewidth=np.inf)
             # logger = logging.getLogger()
             # logger.setLevel(logging.DEBUG)
@@ -322,11 +308,31 @@ def main(params):
                 total_kld_zs = 0
 
                 ## alpha, beta schedule
-                alpha_v = beta_v = 0
-                if e > 2000:
-                    alpha_v = beta_v = min(1, float(e) / 5000 - 0.4)
-
+                if cur_it >= 8000:
+                    break
                 for it in tqdm(range(num_iters)):
+                    if cur_it >= 8000:
+                        break
+
+                    # alpha_v = beta_v = min(1, float(cur_it%(20*num_iters))/(15*num_iters))
+                    alpha_v = beta_v = 1
+                    if cur_it < 6000:
+                        alpha_v = 0.5 * (
+                            1 - np.cos(np.pi * float(cur_it) / 6000)
+                        )
+                    if cur_it < 7000:
+                        beta_v = 0.5 * (
+                            1 - np.cos(np.pi * float(cur_it - 1000) / 6000)
+                        )
+                    if cur_it < 1000:
+                        beta_v = 0
+                    # alpha_v = beta_v = 0.1
+
+                    # if cur_it%700<200:
+                    #     alpha_v = beta_v = 0
+                    # else:
+                    #     alpha_v = beta_v = min(1, float((cur_it%700)-200)/400)
+
                     params.is_training = True
                     start_idx = it * params.batch_size
                     end_idx = (it + 1) * params.batch_size
@@ -362,15 +368,16 @@ def main(params):
                     }
 
                     ## for debugging
-                    # z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, alpha_, beta_, grads_, lce, wce, l_logits, w_logits, zs_state, zg_state = sess.run(
+                    # z1a, z1b,z2a,z2b, z3a, z3b, kzg, kzs, tlb, klw, alpha_, beta_, grads_, lce, wce, l_logits, w_logits, zs_state, zg_state, zg_sample, d_wcs, d_lcs = sess.run(
                     #     [
                     #         Zsent_distribution[0], Zsent_distribution[1],
+                    #         Zglobal_distribition[0], Zglobal_distribition[1],
                     #         Zsent_dec_distribution[0],
                     #         Zsent_dec_distribution[1], neg_kld_zglobal,
                     #         neg_kld_zsent, total_lower_bound, kl_term_weight,
                     #         alpha, beta, gradients, l_cross_entr, w_cross_entr,
                     #         label_logits, word_logits, zsent_state,
-                    #         zglobal_state
+                    #         zglobal_state,zglobal_sample,dec_word_states, dec_label_states
                     #     ],
                     #     feed_dict=feed
                     # )
@@ -400,14 +407,19 @@ def main(params):
                     # with open('values/sent_idx_' + file_idx_s, 'w') as oof:
                     #     oof.write(str(start_idx) + '\n' + str(end_idx))
 
-                    # np.savetxt('values/zs_mu_' + file_idx_s, z1a)
-                    # np.savetxt('values/zs_logvar_' + file_idx_s, z1b)
-                    # np.savetxt('values/zs_dec_mu_' + file_idx_s, z3a)
-                    # np.savetxt('values/zs_dec_logvar_' + file_idx_s, z3b)
-                    # np.savetxt('values/zs_state_' + file_idx_s, zs_state)
-                    # np.savetxt('values/zg_state_' + file_idx_s, zg_state)
-                    # np.savetxt('values/word_logits_' + file_idx_s, w_logits)
-                    # np.savetxt('values/label_logits_' + file_idx_s, l_logits)
+                    # np.savetxt('values/zs_mu_' + file_idx_s, z1a,delimiter=',')
+                    # np.savetxt('values/zs_logvar_' + file_idx_s, z1b,delimiter=',')
+                    # np.savetxt('values/zg_mu_' + file_idx_s, z2a,delimiter=',')
+                    # np.savetxt('values/zg_logvar_' + file_idx_s, z2b,delimiter=',')
+                    # np.savetxt('values/zs_dec_mu_' + file_idx_s, z3a,delimiter=',')
+                    # np.savetxt('values/zs_dec_logvar_' + file_idx_s, z3b,delimiter=',')
+                    # np.savetxt('values/zs_state_' + file_idx_s, zs_state,delimiter=',')
+                    # np.savetxt('values/zg_state_' + file_idx_s, zg_state,delimiter=',')
+                    # np.savetxt('values/word_logits_' + file_idx_s, w_logits,delimiter=',')
+                    # np.savetxt('values/label_logits_' + file_idx_s, l_logits,delimiter=',')
+                    # np.savetxt('values/zg_sample_' + file_idx_s, zg_sample,delimiter=',')
+                    # np.savetxt('values/dec_word_states_' + file_idx_s, d_wcs,delimiter=',')
+                    # np.savetxt('values/dec_label_states_' + file_idx_s, d_lcs,delimiter=',')
 
                     # logger.info('zs_mu %s', z1a.tolist())
                     # logger.info('zs_logvar %s', z1b.tolist())
@@ -418,13 +430,13 @@ def main(params):
                     # logger.info('w_logits %s', w_logits.tolist())
                     # logger.info('l_logits %s', l_logits.tolist())
 
-                    z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, o, alpha_, beta_, clipped_grads_ = sess.run(
+                    z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, o, alpha_, beta_ = sess.run(
                         [
                             Zsent_distribution[0], Zsent_distribution[1],
                             Zsent_dec_distribution[0],
                             Zsent_dec_distribution[1], neg_kld_zglobal,
                             neg_kld_zsent, total_lower_bound, kl_term_weight,
-                            optimize, alpha, beta, clipped_grad
+                            optimize, alpha, beta
                         ],
                         feed_dict=feed
                     )
@@ -434,12 +446,23 @@ def main(params):
                     #         'values/{:02d}_clipped'.format(i), x, delimiter=','
                     #     )
 
-                    cur_it += 1
+                    all_alpha.append(alpha_v)
+                    all_beta.append(beta_v)
+                    all_tlb.append(tlb)
+                    all_kl.append(klw)
+                    all_klzg.append(-kzg)
+                    all_klzs.append(-kzs)
+                    write_lists_to_file(
+                        'test_plot.txt', all_alpha, all_beta, all_tlb, all_kl,
+                        all_klzg, all_klzs
+                    )
+
                     total_tlb += tlb
                     # total_wppl += wppl
                     total_klw += klw
                     total_kld_zg += -kzg
                     total_kld_zs += -kzs
+                    cur_it += 1
                     if cur_it % 100 == 0 and cur_it != 0:
                         path_to_save = os.path.join(
                             params.MODEL_DIR, "vae_lstm_model"
