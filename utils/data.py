@@ -40,17 +40,32 @@ def ptb_read(data_path):
         sent_file="./trained_embeddings_" + params.name + "/labels.pickle"
     )
 
-    return sentences_data, label_data
+    val_data = ptb_data_read(
+        os.path.join(data_path, 'val_data.txt'),
+        sent_file="./trained_embeddings_" + params.name +
+        "/val_sentences.pickle"
+    )
+
+    val_label_data = ptb_data_read(
+        os.path.join(data_path, 'val_labels.txt'),
+        sent_file="./trained_embeddings_" + params.name + "/val_labels.pickle"
+    )
+
+    return sentences_data, label_data, val_data, val_label_data
 
 
 class Dictionary(object):
-    def __init__(self, sentences, labels, vocab_drop):
+    def __init__(
+        self, sentences, labels, val_sentences, val_labels, vocab_drop
+    ):
         # sentences - array of sentences
         self._vocab_drop = vocab_drop
         if vocab_drop < 0:
             raise ValueError
         self._sentences = sentences
+        self._val_sentences = val_sentences
         self._labels = labels
+        self._val_labels = val_labels
         self._word2idx = {}
         self._idx2word = {}
         self._words = []
@@ -58,13 +73,15 @@ class Dictionary(object):
         self._english_words = []
         self._vocab = []
         self._sizes = []
-        self.get_words()
+        self.get_words(self._sentences, self._labels)
+        self.get_words(self._val_sentences, self._val_labels)
         # print(self._words,len(self._words))
         # print(self._hindi_words,len(self._hindi_words))
         # print(self._english_words,len(self._english_words))
         self._words.append('<unk>')
         self.build_vocabulary()
-        self._mod_sentences()
+        self._mod_sentences(self._sentences, self._labels)
+        self._mod_sentences(self._val_sentences, self._val_labels)
 
     @property
     def vocab_size(self):
@@ -87,6 +104,14 @@ class Dictionary(object):
         return self._labels
 
     @property
+    def val_sentences(self):
+        return self._val_sentences
+
+    @property
+    def val_labels(self):
+        return self._val_labels
+
+    @property
     def word2idx(self):
         return self._word2idx
 
@@ -97,25 +122,25 @@ class Dictionary(object):
     def seq2dx(self, sentence):
         return [self.word2idx[wd] for wd in sentence]
 
-    def get_words(self):
-        for i in range(len(self.sentences)):
-            sent = self.sentences[i]
+    def get_words(self, sentences, labels):
+        for i in range(len(sentences)):
+            sent = sentences[i]
             for j in range(len(sent)):
                 word = sent[j]
                 if word in ["<EOS>", "<BOS>", "<PAD>", "<UNK>"]:
                     self._words.append(word)
-                elif (self._labels[i][j] == '0'):
+                elif (labels[i][j] == '0'):
                     self._english_words.append(word.lower())
-                elif (self._labels[i][j] == '1'):
+                elif (labels[i][j] == '1'):
                     self._hindi_words.append(word.lower())
-                elif (self._labels[i][j] == '2'):
+                elif (labels[i][j] == '2'):
                     self._words.append(word.lower())
 
-    def _mod_sentences(self):
+    def _mod_sentences(self, sentences, labels):
         # for every sentence, if word not in vocab set to <unk>
-        for i in range(len(self._sentences)):
-            sent = self._sentences[i]
-            lab = self._labels[i]
+        for i in range(len(sentences)):
+            sent = sentences[i]
+            lab = labels[i]
             for j in range(len(sent)):
                 sent[j] = sent[j] if sent[j] in [
                     "<EOS>", "<BOS>", "<PAD>", "<UNK>", "N"
@@ -125,8 +150,8 @@ class Dictionary(object):
                 except:
                     sent[j] = '<unk>'
                     lab[j] = '2'
-            self._sentences[i] = sent
-            self._labels[i] = lab
+            sentences[i] = sent
+            labels[i] = lab
 
     def build_vocabulary(self):
         counter_words = collections.Counter(self._words)
@@ -253,10 +278,14 @@ def save_data(sentences, pkl_file, text_file):
             wf.write("\n")
 
 
-def prepare_data(data_raw, labels_raw, params, data_path):
+def prepare_data(
+    data_raw, labels_raw, val_data_raw, val_labels_raw, params, data_path
+):
     # get embeddings, prepare data
     print("building dictionary")
-    data_dict = Dictionary(data_raw, labels_raw, params.vocab_drop)
+    data_dict = Dictionary(
+        data_raw, labels_raw, val_data_raw, val_labels_raw, params.vocab_drop
+    )
     save_data(
         data_dict.sentences,
         "./trained_embeddings_" + params.name + "/sentences_mod.pickle",
@@ -266,6 +295,16 @@ def prepare_data(data_raw, labels_raw, params, data_path):
         data_dict.labels,
         "./trained_embeddings_" + params.name + "/labels_mod.pickle",
         os.path.join(data_path, 'labels_mod.txt')
+    )
+    save_data(
+        data_dict.val_sentences,
+        "./trained_embeddings_" + params.name + "/val_sentences_mod.pickle",
+        os.path.join(data_path, 'val_data_mod.txt')
+    )
+    save_data(
+        data_dict.val_labels,
+        "./trained_embeddings_" + params.name + "/val_labels_mod.pickle",
+        os.path.join(data_path, 'val_labels_mod.txt')
     )
 
     sizes = data_dict.sizes
@@ -352,6 +391,10 @@ def prepare_data(data_raw, labels_raw, params, data_path):
                    for word in sent[1:]] for sent in data_dict.sentences \
                   if len(sent) < params.sent_max_size - 2]
 
+    encoder_val_data = [[data_dict.word2idx[word] \
+                   for word in sent[1:]] for sent in data_dict.val_sentences \
+                  if len(sent) < params.sent_max_size - 2]
+
     decoder_labels = []
     for sent in data_dict.sentences:
         a = []
@@ -383,4 +426,4 @@ def prepare_data(data_raw, labels_raw, params, data_path):
             len(data_raw), data_dict.vocab_size, len(data)
         )
     )
-    return data, encoder_data, decoder_labels, embed_arr, data_dict
+    return data, encoder_data, decoder_labels, embed_arr, data_dict, encoder_val_data

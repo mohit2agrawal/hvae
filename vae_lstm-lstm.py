@@ -56,31 +56,84 @@ def write_lists_to_file(filename, *lists):
             f.write('\n')
 
 
+def log_sum_exp(value, axis=None, keepdims=False):
+    """Numerically stable implementation of the (torch) operation
+    value.exp().sum(axis, keepdims).log()
+    """
+    if axis is not None:
+        m = tf.reduce_max(value, axis=axis, keepdims=True)
+        value0 = value - m
+        if keepdims is False:
+            m = tf.squeeze(m, axis)
+        return m + tf.log(
+            tf.reduce_sum(tf.exp(value0), axis=axis, keepdims=keepdims)
+        )
+    else:
+        m = tf.reduce_max(value)
+        sum_exp = tf.reduce_sum(tf.exp(value - m))
+        return m + tf.log(sum_exp)
+
+
+def calc_mi_q(mu, logvar, z_samples):
+
+    # mu, logvar = Zsent_distribution
+    x_batch, nz = tf.shape(mu)
+
+    # [z_batch, 1, nz]
+    z_samples = tf.expand_dims(z_samples, 1)
+
+    # E_{q(z|x)}log(q(z|x)) = -0.5*nz*log(2*\pi) - 0.5*(1+logvar).sum(-1)
+    neg_entropy = tf.reduce_mean(
+        -0.5 * nz * tf.log(2 * np.pi) - 0.5 * tf.reduce_sum(1 + logvar, -1)
+    )
+
+    # [1, x_batch, nz]
+    mu, logvar = tf.expand_dims(mu, 0), tf.expand_dims(logvar, 0)
+    var = tf.exp(logvar)
+
+    # (z_batch, x_batch, nz)
+    dev = z_samples - mu
+
+    # (z_batch, x_batch)
+    log_density = -0.5 * tf.reduce_sum(tf.square(dev) / var, -1) \
+        - 0.5 * (nz * tf.log(2 * np.pi) + tf.reduce_sum(logvar, -1))
+
+    # log q(z): aggregate posterior
+    # [z_batch]
+    log_qz = log_sum_exp(log_density, axis=1) - tf.log(x_batch)
+
+    return tf.squeeze(neg_entropy - tf.reduce_mean(log_qz, -1))
+
+
 def main(params):
     if params.input_ == 'PTB':
         # data_folder = './DATA/parallel_data_10k/'
         data_folder = './DATA/ptb/'
         # data in form [data, labels]
-        train_data_raw, train_label_raw = data_.ptb_read(data_folder)
-        word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict = data_.prepare_data(
-            train_data_raw, train_label_raw, params, data_folder
-        )
-
-        train_label_raw, valid_label_raw, test_label_raw = label_data_.ptb_read(
+        train_data_raw, train_label_raw, val_data_raw, val_label_raw = data_.ptb_read(
             data_folder
         )
-        label_data, label_labels_arr, label_embed_arr, label_data_dict = label_data_.prepare_data(
-            train_label_raw, params
+        word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, encoder_val_data = data_.prepare_data(
+            train_data_raw, train_label_raw, val_data_raw, val_label_raw,
+            params, data_folder
+        )
+
+        train_label_raw, val_label_raw, test_label_raw = label_data_.ptb_read(
+            data_folder
+        )
+        label_data, label_labels_arr, label_embed_arr, label_data_dict, val_labels_arr = label_data_.prepare_data(
+            train_label_raw, val_label_raw, params
         )
 
         max_sent_len = max(
             max(map(len, word_data)), max(map(len, encoder_word_data))
         )
+        max_sent_len = max(max_sent_len, max(map(len, encoder_val_data)))
 
     with tf.Graph().as_default() as graph:
 
         label_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="lable_inputs"
+            dtype=tf.int32, shape=[None, None], name="label_inputs"
         )
         word_inputs = tf.placeholder(
             dtype=tf.int32, shape=[None, None], name="word_inputs"
@@ -114,6 +167,10 @@ def main(params):
                     word_embedding, word_inputs, name="word_lookup"
                 )
 
+                # val_vect_inputs = tf.nn.embedding_lookup(
+                #     word_embedding, val_word_inputs, name="word_lookup"
+                # )
+
                 label_embedding = tf.Variable(
                     label_embed_arr,
                     trainable=params.fine_tune_embed,
@@ -124,6 +181,9 @@ def main(params):
                 label_inputs_1 = tf.nn.embedding_lookup(
                     label_embedding, label_inputs, name="label_lookup"
                 )
+                # val_label_inputs_1 = tf.nn.embedding_lookup(
+                #     label_embedding, val_label_inputs, name="label_lookup"
+                # )
 
         # inputs = tf.unstack(inputs, num=num_steps, axis=1)
         sizes = word_data_dict.sizes
@@ -221,6 +281,22 @@ def main(params):
             zip(clipped_grad, tf.trainable_variables())
         )
 
+        gradients_encoder = tf.gradients(
+            total_lower_bound, tf.trainable_variables('encoder')
+        )
+        clipped_grad_encoder = tf.clip_by_global_norm(gradients_encoder, 5)
+        optimize_encoder = opt.apply_gradients(
+            zip(clipped_grad_encoder, tf.trainable_variables('encoder'))
+        )
+
+        gradients_decoder = tf.gradients(
+            total_lower_bound, tf.trainable_variables('decoder')
+        )
+        clipped_grad_decoder = tf.clip_by_global_norm(gradients_decoder, 5)
+        optimize_decoder = opt.apply_gradients(
+            zip(clipped_grad_decoder, tf.trainable_variables('decoder'))
+        )
+
         saver = tf.train.Saver(max_to_keep=10)
         config = tf.ConfigProto(device_count={'GPU': 0})
         with tf.Session(config=config) as sess:
@@ -279,14 +355,15 @@ def main(params):
             #ptb_data = PTBInput(params.batch_size, train_data)
             num_iters = len(word_data) // params.batch_size
             cur_it = 0
-            iters, tlb_arr, klw_arr, kld_zg_arr, kld_zs_arr = [], [], [], [], []
-            alpha_arr, beta_arr = [], []
-            # wppl_arr = []
 
             all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
 
+            burn_pre_loss = 1e4
+            sub_iter = 0 ## for aggressive encoder optim
+            aggresive = True
+
             ## for debugging
-            file_idx = -1
+            # file_idx = -1
             # np.set_printoptions(linewidth=np.inf)
             # logger = logging.getLogger()
             # logger.setLevel(logging.DEBUG)
@@ -300,6 +377,7 @@ def main(params):
             # logger.addHandler(ch)
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
+                params.is_training = True
                 print("Epoch: {} started at: {}".format(e, epoch_start_time))
                 total_tlb = 0
                 # total_wppl = 0
@@ -308,32 +386,25 @@ def main(params):
                 total_kld_zs = 0
 
                 ## alpha, beta schedule
-                if cur_it >= 8000:
-                    break
+                # if cur_it >= 8000:
+                #     break
                 for it in tqdm(range(num_iters)):
-                    if cur_it >= 8000:
-                        break
+                    # if cur_it >= 8000:
+                    #     break
 
                     # alpha_v = beta_v = min(1, float(cur_it%(20*num_iters))/(15*num_iters))
                     alpha_v = beta_v = 1
-                    if cur_it < 6000:
-                        alpha_v = 0.5 * (
-                            1 - np.cos(np.pi * float(cur_it) / 6000)
-                        )
-                    if cur_it < 7000:
-                        beta_v = 0.5 * (
-                            1 - np.cos(np.pi * float(cur_it - 1000) / 6000)
-                        )
-                    if cur_it < 1000:
-                        beta_v = 0
-                    # alpha_v = beta_v = 0.1
+                    # if cur_it < 6000:
+                    #     alpha_v = 0.5 * (
+                    #         1 - np.cos(np.pi * float(cur_it) / 6000)
+                    #     )
+                    # if cur_it < 7000:
+                    #     beta_v = 0.5 * (
+                    #         1 - np.cos(np.pi * float(cur_it - 1000) / 6000)
+                    #     )
+                    # if cur_it < 1000:
+                    #     beta_v = 0
 
-                    # if cur_it%700<200:
-                    #     alpha_v = beta_v = 0
-                    # else:
-                    #     alpha_v = beta_v = min(1, float((cur_it%700)-200)/400)
-
-                    params.is_training = True
                     start_idx = it * params.batch_size
                     end_idx = (it + 1) * params.batch_size
 
@@ -345,6 +416,8 @@ def main(params):
                     sent_dec_l_batch = word_labels_arr[start_idx:end_idx]
                     sent_l_batch = encoder_word_data[start_idx:end_idx]
                     label_l_batch = label_labels_arr[start_idx:end_idx]
+
+                    burn_batch_size, burn_sents_len = sent_l_batch.shape
 
                     # not optimal!!
                     length_ = np.array([len(sent) for sent in sent_batch]
@@ -367,79 +440,89 @@ def main(params):
                         beta: beta_v
                     }
 
-                    ## for debugging
-                    # z1a, z1b,z2a,z2b, z3a, z3b, kzg, kzs, tlb, klw, alpha_, beta_, grads_, lce, wce, l_logits, w_logits, zs_state, zg_state, zg_sample, d_wcs, d_lcs = sess.run(
-                    #     [
-                    #         Zsent_distribution[0], Zsent_distribution[1],
-                    #         Zglobal_distribition[0], Zglobal_distribition[1],
-                    #         Zsent_dec_distribution[0],
-                    #         Zsent_dec_distribution[1], neg_kld_zglobal,
-                    #         neg_kld_zsent, total_lower_bound, kl_term_weight,
-                    #         alpha, beta, gradients, l_cross_entr, w_cross_entr,
-                    #         label_logits, word_logits, zsent_state,
-                    #         zglobal_state,zglobal_sample,dec_word_states, dec_label_states
-                    #     ],
-                    #     feed_dict=feed
-                    # )
 
-                    # file_idx += 1
-                    # file_idx %= 5
-                    # file_idx_s = str(file_idx)
+                    if aggressive:
+                        if sub_iter < 100:
+                            sub_iter += 1
+                            ## aggressively optimize encoder
+                            loss, _ = sess.run([total_lower_bound, optimize_encoder],
+                                        feed_dict=feed)
 
-                    # for i, x in enumerate(grads_):
-                    #     np.savetxt(
-                    #         'values/{:02d}_grads_{}'.format(i, file_idx),
-                    #         x,
-                    #         delimiter=','
-                    #     )
-                    # np.savetxt(
-                    #     'values/label_cross_entropy_' + file_idx_s,
-                    #     lce,
-                    #     delimiter=','
-                    # )
-                    # np.savetxt(
-                    #     'values/word_cross_entropy_' + file_idx_s,
-                    #     wce,
-                    #     delimiter=','
-                    # )
-                    # with open('values/vals_' + file_idx_s, 'w') as oof:
-                    #     oof.write('\n'.join(map(str, [kzg, kzs, tlb])))
-                    # with open('values/sent_idx_' + file_idx_s, 'w') as oof:
-                    #     oof.write(str(start_idx) + '\n' + str(end_idx))
+                            if sub_iter % 15 == 0:
+                                burn_num_words += (burn_sents_len - 1) * burn_batch_size
+                                burn_cur_loss += loss
+                                burn_cur_loss = burn_cur_loss / burn_num_words
+                                if burn_pre_loss - burn_cur_loss < 0:
+                                    ## stop encoder only updates
+                                    ## do one full VAE update
+                                    sub_iter = 100
+                                    continue
+                                burn_pre_loss = burn_cur_loss
+                                burn_cur_loss = burn_num_words = 0
+                        else:  ## if sub_iter >= 100
+                            sub_iter = 0 ## try aggressive in next run
+                            sent_mi = 0
+                            global_mi = 0
+                            num_examples = 0
 
-                    # np.savetxt('values/zs_mu_' + file_idx_s, z1a,delimiter=',')
-                    # np.savetxt('values/zs_logvar_' + file_idx_s, z1b,delimiter=',')
-                    # np.savetxt('values/zg_mu_' + file_idx_s, z2a,delimiter=',')
-                    # np.savetxt('values/zg_logvar_' + file_idx_s, z2b,delimiter=',')
-                    # np.savetxt('values/zs_dec_mu_' + file_idx_s, z3a,delimiter=',')
-                    # np.savetxt('values/zs_dec_logvar_' + file_idx_s, z3b,delimiter=',')
-                    # np.savetxt('values/zs_state_' + file_idx_s, zs_state,delimiter=',')
-                    # np.savetxt('values/zg_state_' + file_idx_s, zg_state,delimiter=',')
-                    # np.savetxt('values/word_logits_' + file_idx_s, w_logits,delimiter=',')
-                    # np.savetxt('values/label_logits_' + file_idx_s, l_logits,delimiter=',')
-                    # np.savetxt('values/zg_sample_' + file_idx_s, zg_sample,delimiter=',')
-                    # np.savetxt('values/dec_word_states_' + file_idx_s, d_wcs,delimiter=',')
-                    # np.savetxt('values/dec_label_states_' + file_idx_s, d_lcs,delimiter=',')
+                            ## Calculate MI
 
-                    # logger.info('zs_mu %s', z1a.tolist())
-                    # logger.info('zs_logvar %s', z1b.tolist())
-                    # logger.info('zs_dec_mu %s', z3a.tolist())
-                    # logger.info('zs_dec_logvar %s', z3b.tolist())
-                    # logger.info('zs_state %s', zs_state.tolist())
-                    # logger.info('zg_state %s', zg_state.tolist())
-                    # logger.info('w_logits %s', w_logits.tolist())
-                    # logger.info('l_logits %s', l_logits.tolist())
+                            ## weighted average on calc_mi_q
+                            val_len = encoder_val_data.shape[0]
+                            for val_it in range(val_len//params.num_epochs +1):
+                                s_idx = val_it*params.num_epochs
+                                e_idx = (val_it+1)*params.num_epochs
+                                word_input = encoder_val_data[s_idx:e_idx]
+                                label_input = val_labels_arr[s_idx:e_idx]
+                                feed = {
+                                    word_inputs: word_input,
+                                    label_inputs: label_input,
+                                    d_word_labels: sent_dec_l_batch,
+                                    d_label_labels: label_l_batch,
+                                    d_seq_length: length_,
+                                    alpha: alpha_v,
+                                    beta: beta_v
+                                }
 
-                    z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, o, alpha_, beta_ = sess.run(
-                        [
-                            Zsent_distribution[0], Zsent_distribution[1],
-                            Zsent_dec_distribution[0],
-                            Zsent_dec_distribution[1], neg_kld_zglobal,
-                            neg_kld_zsent, total_lower_bound, kl_term_weight,
-                            optimize, alpha, beta
-                        ],
-                        feed_dict=feed
-                    )
+
+                            for batch_data in test_data_batch:
+                                batch_size = tf.shape(batch_data)[0]
+                                num_examples += batch_size
+
+                                ## TODO give proper inputs in place of val_vect_inputs, val_label_inputs_1
+                                Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
+                                    val_vect_inputs, val_label_inputs_1, params.batch_size, max_sent_len
+                                )
+
+                                ## TODO same for label
+                                mutual_info = model.calc_mi_q(
+                                    Zsent_distribution[0], Zsent_distribution[1], zsent_sample
+                                )
+                                mi += mutual_info * batch_size
+
+                            sent_mi /= num_examples
+                            global_mi /= num_examples
+                            cur_mi = sent_mi + global_mi
+
+                            print("pre mi:%.4f. cur mi:%.4f" % (pre_mi, cur_mi))
+                            if cur_mi - pre_mi < 0:
+                                aggressive_flag = False
+                                print("STOP BURNING")
+                            pre_mi = cur_mi
+
+                    ## if not aggressive
+                    else:
+                        sub_iter = 0 ## try aggressive in next run
+                        z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, _, alpha_, beta_ = sess.run(
+                            [
+                                Zsent_distribution[0], Zsent_distribution[1],
+                                Zsent_dec_distribution[0],
+                                Zsent_dec_distribution[1], neg_kld_zglobal,
+                                neg_kld_zsent, total_lower_bound,
+                                kl_term_weight, optimize, alpha, beta
+                            ],
+                            feed_dict=feed
+                        )
 
                     # for i, x in enumerate(clipped_grads_):
                     #     np.savetxt(
@@ -473,28 +556,6 @@ def main(params):
                         )
                         # print(model_path_name)
 
-                avg_tlb = total_tlb / num_iters
-                # avg_wppl = total_wppl / num_iters
-                avg_klw = total_klw / num_iters
-                avg_kld_zg = total_kld_zg / num_iters
-                avg_kld_zs = total_kld_zs / num_iters
-
-                iters.append(e)
-                tlb_arr.append(avg_tlb)
-                # wppl_arr.append(avg_wppl)
-                klw_arr.append(avg_klw)
-                kld_zg_arr.append(avg_kld_zg)
-                kld_zs_arr.append(avg_kld_zs)
-                alpha_arr.append(alpha_)
-                beta_arr.append(beta_)
-
-                print("Time Taken:", datetime.datetime.now() - epoch_start_time)
-
-                plot_filename = "./plot_values_{}.txt".format(params.num_epochs)
-                write_lists_to_file(
-                    plot_filename, iters, tlb_arr, klw_arr, kld_zg_arr,
-                    kld_zs_arr, alpha_arr, beta_arr
-                )
 
 
 if __name__ == "__main__":
