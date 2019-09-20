@@ -106,29 +106,31 @@ def calc_mi_q(mu, logvar, z_samples):
 
 
 def main(params):
-    if params.input_ == 'PTB':
-        # data_folder = './DATA/parallel_data_10k/'
-        data_folder = './DATA/ptb/'
-        # data in form [data, labels]
-        train_data_raw, train_label_raw, val_data_raw, val_label_raw = data_.ptb_read(
-            data_folder
-        )
-        word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, encoder_val_data = data_.prepare_data(
-            train_data_raw, train_label_raw, val_data_raw, val_label_raw,
-            params, data_folder
-        )
+    # data_folder = './DATA/parallel_data_10k/'
+    data_folder = {
+        'ptb': './DATA/ptb/',
+        'ptb_ner': './DATA/ptb_ner'
+    }.get(params.name)
+    # data in form [data, labels]
+    train_data_raw, train_label_raw, val_data_raw, val_label_raw = data_.ptb_read(
+        data_folder
+    )
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, encoder_val_data = data_.prepare_data(
+        train_data_raw, train_label_raw, val_data_raw, val_label_raw, params,
+        data_folder
+    )
 
-        train_label_raw, val_label_raw, test_label_raw = label_data_.ptb_read(
-            data_folder
-        )
-        label_data, label_labels_arr, label_embed_arr, label_data_dict, val_labels_arr = label_data_.prepare_data(
-            train_label_raw, val_label_raw, params
-        )
+    train_label_raw, val_label_raw, test_label_raw = label_data_.ptb_read(
+        data_folder
+    )
+    label_data, label_labels_arr, label_embed_arr, label_data_dict, val_labels_arr = label_data_.prepare_data(
+        train_label_raw, val_label_raw, params
+    )
 
-        max_sent_len = max(
-            max(map(len, word_data)), max(map(len, encoder_word_data))
-        )
-        max_sent_len = max(max_sent_len, max(map(len, encoder_val_data)))
+    max_sent_len = max(
+        max(map(len, word_data)), max(map(len, encoder_word_data))
+    )
+    max_sent_len = max(max_sent_len, max(map(len, encoder_val_data)))
 
     with tf.Graph().as_default() as graph:
 
@@ -273,29 +275,50 @@ def main(params):
 
         total_lower_bound = rec_loss + kl_term_weight
 
-        gradients = tf.gradients(total_lower_bound, tf.trainable_variables())
-        clipped_grad, _ = tf.clip_by_global_norm(gradients, 5)
-        opt = tf.train.AdamOptimizer(learning_rate=params.learning_rate)
-        # optimize = opt.apply_gradients(zip(gradients, tf.trainable_variables()))
+        gradients = tf.gradients(
+            total_lower_bound, tf.trainable_variables(), name='gradients'
+        )
+        clipped_grad, _ = tf.clip_by_global_norm(gradients, 5, name='clipped')
+        opt = tf.train.AdamOptimizer(
+            learning_rate=params.learning_rate, name='adam'
+        )
         optimize = opt.apply_gradients(
             zip(clipped_grad, tf.trainable_variables())
         )
 
         gradients_encoder = tf.gradients(
-            total_lower_bound, tf.trainable_variables('encoder')
+            total_lower_bound,
+            tf.trainable_variables('encoder'),
+            name='gradients_encoder'
         )
-        clipped_grad_encoder = tf.clip_by_global_norm(gradients_encoder, 5)
-        optimize_encoder = opt.apply_gradients(
+        clipped_grad_encoder, _ = tf.clip_by_global_norm(
+            gradients_encoder, 5, name='clipped_encoder'
+        )
+        opt_encoder = tf.train.AdamOptimizer(
+            learning_rate=params.learning_rate, name='adam_encoder'
+        )
+        optimize_encoder = opt_encoder.apply_gradients(
             zip(clipped_grad_encoder, tf.trainable_variables('encoder'))
         )
 
-        gradients_decoder = tf.gradients(
-            total_lower_bound, tf.trainable_variables('decoder')
+        mi_mu = tf.placeholder(
+            shape=[None, None], dtype=tf.float64, name="mi_mu"
         )
-        clipped_grad_decoder = tf.clip_by_global_norm(gradients_decoder, 5)
-        optimize_decoder = opt.apply_gradients(
-            zip(clipped_grad_decoder, tf.trainable_variables('decoder'))
+        mi_logvar = tf.placeholder(
+            shape=[None, None], dtype=tf.float64, name="mi_logvar"
         )
+        mi_samples = tf.placeholder(
+            shape=[None, None], dtype=tf.float64, name="mi_samples"
+        )
+        mutual_info = calc_mi_q(mi_mu, mi_logvar, mi_samples)
+
+        # gradients_decoder = tf.gradients(
+        #     total_lower_bound, tf.trainable_variables('decoder')
+        # )
+        # clipped_grad_decoder = tf.clip_by_global_norm(gradients_decoder, 5)
+        # optimize_decoder = opt.apply_gradients(
+        #     zip(clipped_grad_decoder, tf.trainable_variables('decoder'))
+        # )
 
         saver = tf.train.Saver(max_to_keep=10)
         config = tf.ConfigProto(device_count={'GPU': 0})
@@ -407,7 +430,10 @@ def main(params):
                     sent_l_batch = encoder_word_data[start_idx:end_idx]
                     label_l_batch = label_labels_arr[start_idx:end_idx]
 
-                    burn_batch_size, burn_sents_len = sent_l_batch.shape
+                    ## burn_batch_size, burn_sents_len = sent_l_batch.shape
+                    ## TODO the burn_sents_len will be different for each idx?
+                    burn_batch_size = len(sent_l_batch)
+                    burn_sents_len = len(sent_l_batch[0])
 
                     # not optimal!!
                     length_ = np.array([len(sent) for sent in sent_batch]
@@ -440,6 +466,7 @@ def main(params):
                             )
 
                             if sub_iter % 15 == 0:
+                                ## TODO why -1?
                                 burn_num_words += (
                                     burn_sents_len - 1
                                 ) * burn_batch_size
@@ -466,16 +493,19 @@ def main(params):
                             ## Calculate MI
 
                             ## weighted average on calc_mi_q
-                            val_len = encoder_val_data.shape[0]
+                            val_len = len(encoder_val_data)
                             for val_it in range(
-                                val_len // params.num_epochs + 1
+                                val_len // params.batch_size + 1
                             ):
-                                s_idx = val_it * params.num_epochs
-                                e_idx = (val_it + 1) * params.num_epochs
+                                s_idx = val_it * params.batch_size
+                                e_idx = (val_it + 1) * params.batch_size
                                 word_input = encoder_val_data[s_idx:e_idx]
+                                word_input = zero_pad(word_input, pad)
                                 label_input = val_labels_arr[s_idx:e_idx]
+                                label_input = zero_pad(label_input, pad)
 
-                                batch_size = word_input.shape[0]
+                                ## batch_size = word_input.shape[0]
+                                batch_size = len(word_input)
                                 num_examples += batch_size
 
                                 feed = {
@@ -487,6 +517,10 @@ def main(params):
                                     # alpha: alpha_v,
                                     # beta: beta_v
                                 }
+                                # print(pad)
+                                # print([len(x) for x in word_input])
+                                # print('-' * 10)
+                                # print([len(x) for x in label_input])
 
                                 zs_dist, zs_sample, zg_dist, zg_sample, _, _ = sess.run(
                                     [
@@ -496,13 +530,23 @@ def main(params):
                                     ],
                                     feed_dict=feed
                                 )
-                                mi_s = calc_mi_q(
-                                    zs_dist[0], zs_dist[1], zs_sample
+                                mi_s = sess.run(
+                                    mutual_info,
+                                    feed_dict={
+                                        mi_mu: zs_dist[0],
+                                        mi_logvar: zs_dist[1],
+                                        mi_samples: zs_sample
+                                    }
                                 )
                                 sent_mi += mi_s * batch_size
 
-                                mi_g = calc_mi_q(
-                                    zg_dist[0], zg_dist[1], zg_sample
+                                mi_g = sess.run(
+                                    mutual_info,
+                                    feed_dict={
+                                        mi_mu: zg_dist[0],
+                                        mi_logvar: zg_dist[1],
+                                        mi_samples: zg_sample
+                                    }
                                 )
                                 global_mi += mi_g * batch_size
 
