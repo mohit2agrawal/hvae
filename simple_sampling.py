@@ -119,7 +119,7 @@ def main(params):
             batch_size = 1
             number_of_samples = params.num_samples
             same_context_sentences = 1
-            out_sentence_file = "./generated_words.txt"
+            out_sentence_file = "./generated_sentences.txt"
             out_labels_file = "./generated_labels.txt"
 
             with open(out_sentence_file,
