@@ -9,3 +9,6 @@ values
 graph*
 *.txt
 *.vec
+*.png
+checkpoints
+*.swp

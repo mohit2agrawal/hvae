@@ -358,9 +358,11 @@ def main(params):
 
             all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
 
+            sub_iter = 0  ## for aggressive encoder optim
+            aggressive = True
+            burn_num_words = 0
             burn_pre_loss = 1e4
-            sub_iter = 0 ## for aggressive encoder optim
-            aggresive = True
+            burn_cur_loss = 0
 
             ## for debugging
             # file_idx = -1
@@ -391,19 +393,7 @@ def main(params):
                 for it in tqdm(range(num_iters)):
                     # if cur_it >= 8000:
                     #     break
-
-                    # alpha_v = beta_v = min(1, float(cur_it%(20*num_iters))/(15*num_iters))
                     alpha_v = beta_v = 1
-                    # if cur_it < 6000:
-                    #     alpha_v = 0.5 * (
-                    #         1 - np.cos(np.pi * float(cur_it) / 6000)
-                    #     )
-                    # if cur_it < 7000:
-                    #     beta_v = 0.5 * (
-                    #         1 - np.cos(np.pi * float(cur_it - 1000) / 6000)
-                    #     )
-                    # if cur_it < 1000:
-                    #     beta_v = 0
 
                     start_idx = it * params.batch_size
                     end_idx = (it + 1) * params.batch_size
@@ -440,16 +430,19 @@ def main(params):
                         beta: beta_v
                     }
 
-
                     if aggressive:
                         if sub_iter < 100:
                             sub_iter += 1
                             ## aggressively optimize encoder
-                            loss, _ = sess.run([total_lower_bound, optimize_encoder],
-                                        feed_dict=feed)
+                            loss, _ = sess.run(
+                                [total_lower_bound, optimize_encoder],
+                                feed_dict=feed
+                            )
 
                             if sub_iter % 15 == 0:
-                                burn_num_words += (burn_sents_len - 1) * burn_batch_size
+                                burn_num_words += (
+                                    burn_sents_len - 1
+                                ) * burn_batch_size
                                 burn_cur_loss += loss
                                 burn_cur_loss = burn_cur_loss / burn_num_words
                                 if burn_pre_loss - burn_cur_loss < 0:
@@ -460,7 +453,12 @@ def main(params):
                                 burn_pre_loss = burn_cur_loss
                                 burn_cur_loss = burn_num_words = 0
                         else:  ## if sub_iter >= 100
-                            sub_iter = 0 ## try aggressive in next run
+                            #
+                            sub_iter = 0  ## try aggressive in next run
+                            burn_num_words = 0
+                            burn_pre_loss = 1e4
+                            burn_cur_loss = 0
+                            #
                             sent_mi = 0
                             global_mi = 0
                             num_examples = 0
@@ -469,36 +467,44 @@ def main(params):
 
                             ## weighted average on calc_mi_q
                             val_len = encoder_val_data.shape[0]
-                            for val_it in range(val_len//params.num_epochs +1):
-                                s_idx = val_it*params.num_epochs
-                                e_idx = (val_it+1)*params.num_epochs
+                            for val_it in range(
+                                val_len // params.num_epochs + 1
+                            ):
+                                s_idx = val_it * params.num_epochs
+                                e_idx = (val_it + 1) * params.num_epochs
                                 word_input = encoder_val_data[s_idx:e_idx]
                                 label_input = val_labels_arr[s_idx:e_idx]
+
+                                batch_size = word_input.shape[0]
+                                num_examples += batch_size
+
                                 feed = {
                                     word_inputs: word_input,
                                     label_inputs: label_input,
-                                    d_word_labels: sent_dec_l_batch,
-                                    d_label_labels: label_l_batch,
-                                    d_seq_length: length_,
-                                    alpha: alpha_v,
-                                    beta: beta_v
+                                    # d_word_labels: sent_dec_l_batch,
+                                    # d_label_labels: label_l_batch,
+                                    # d_seq_length: length_,
+                                    # alpha: alpha_v,
+                                    # beta: beta_v
                                 }
 
-
-                            for batch_data in test_data_batch:
-                                batch_size = tf.shape(batch_data)[0]
-                                num_examples += batch_size
-
-                                ## TODO give proper inputs in place of val_vect_inputs, val_label_inputs_1
-                                Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
-                                    val_vect_inputs, val_label_inputs_1, params.batch_size, max_sent_len
+                                zs_dist, zs_sample, zg_dist, zg_sample, _, _ = sess.run(
+                                    [
+                                        Zsent_distribution, zsent_sample,
+                                        Zglobal_distribition, zglobal_sample,
+                                        zsent_state, zglobal_state
+                                    ],
+                                    feed_dict=feed
                                 )
-
-                                ## TODO same for label
-                                mutual_info = model.calc_mi_q(
-                                    Zsent_distribution[0], Zsent_distribution[1], zsent_sample
+                                mi_s = calc_mi_q(
+                                    zs_dist[0], zs_dist[1], zs_sample
                                 )
-                                mi += mutual_info * batch_size
+                                sent_mi += mi_s * batch_size
+
+                                mi_g = calc_mi_q(
+                                    zg_dist[0], zg_dist[1], zg_sample
+                                )
+                                global_mi += mi_g * batch_size
 
                             sent_mi /= num_examples
                             global_mi /= num_examples
@@ -512,7 +518,8 @@ def main(params):
 
                     ## if not aggressive
                     else:
-                        sub_iter = 0 ## try aggressive in next run
+                        sub_iter = 0  ## try aggressive in next run
+                        ## both decoder and encoder updates
                         z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, _, alpha_, beta_ = sess.run(
                             [
                                 Zsent_distribution[0], Zsent_distribution[1],
@@ -524,27 +531,22 @@ def main(params):
                             feed_dict=feed
                         )
 
-                    # for i, x in enumerate(clipped_grads_):
-                    #     np.savetxt(
-                    #         'values/{:02d}_clipped'.format(i), x, delimiter=','
-                    #     )
+                        all_alpha.append(alpha_v)
+                        all_beta.append(beta_v)
+                        all_tlb.append(tlb)
+                        all_kl.append(klw)
+                        all_klzg.append(-kzg)
+                        all_klzs.append(-kzs)
+                        write_lists_to_file(
+                            'test_plot.txt', all_alpha, all_beta, all_tlb,
+                            all_kl, all_klzg, all_klzs
+                        )
 
-                    all_alpha.append(alpha_v)
-                    all_beta.append(beta_v)
-                    all_tlb.append(tlb)
-                    all_kl.append(klw)
-                    all_klzg.append(-kzg)
-                    all_klzs.append(-kzs)
-                    write_lists_to_file(
-                        'test_plot.txt', all_alpha, all_beta, all_tlb, all_kl,
-                        all_klzg, all_klzs
-                    )
-
-                    total_tlb += tlb
-                    # total_wppl += wppl
-                    total_klw += klw
-                    total_kld_zg += -kzg
-                    total_kld_zs += -kzs
+                    # total_tlb += tlb
+                    # # total_wppl += wppl
+                    # total_klw += klw
+                    # total_kld_zg += -kzg
+                    # total_kld_zs += -kzs
                     cur_it += 1
                     if cur_it % 100 == 0 and cur_it != 0:
                         path_to_save = os.path.join(
@@ -555,7 +557,6 @@ def main(params):
                             sess, path_to_save, global_step=cur_it
                         )
                         # print(model_path_name)
-
 
 
 if __name__ == "__main__":
