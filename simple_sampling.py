@@ -18,6 +18,8 @@ import os
 from tensorflow.python.tools import inspect_checkpoint as chkp
 from hvae_model import encoder, decoder
 
+from tqdm import tqdm
+
 
 # PTB input from tf tutorial
 class PTBInput(object):
@@ -49,7 +51,9 @@ def rnn_placeholders(state):
 
 def softmax(x):
     """Compute softmax values for each sets of scores in x."""
-    return np.exp(x) / np.sum(np.exp(x), axis=0)
+    if x.ndim == 1:
+        return np.exp(x) / np.sum(np.exp(x))
+    return np.exp(x) / np.sum(np.exp(x), axis=1, keepdims=True)
 
 
 def main(params):
@@ -76,79 +80,19 @@ def main(params):
     )
 
     with tf.Graph().as_default() as graph:
-
-        label_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="lable_inputs"
-        )
-        word_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="word_inputs"
-        )
-
-        # d_word_inputs = tf.placeholder(
-        #     dtype=tf.int32, shape=[None, None], name="d_word_inputs"
-        # )
-        # d_label_inputs = tf.placeholder(
-        #     dtype=tf.int32, shape=[None, None], name="d_label_inputs"
-        # )
-
-        with tf.device("/cpu:0"):
-            if not params.pre_trained_embed:
-                word_embedding = tf.get_variable(
-                    "word_embedding", [data_dict.vocab_size, params.embed_size],
-                    dtype=tf.float64
-                )
-                vect_inputs = tf.nn.embedding_lookup(
-                    word_embedding, word_inputs
-                )
-            else:
-                # [data_dict.vocab_size, params.embed_size]
-                word_embedding = tf.Variable(
-                    word_embed_arr,
-                    trainable=params.fine_tune_embed,
-                    name="word_embedding",
-                    dtype=tf.float64
-                )  #creates a variable that can be used as a tensor
-                vect_inputs = tf.nn.embedding_lookup(
-                    word_embedding, word_inputs, name="word_lookup"
-                )
-
-                label_embedding = tf.Variable(
-                    label_embed_arr,
-                    trainable=params.fine_tune_embed,
-                    name="label_embedding",
-                    dtype=tf.float64
-                )  #creates a variable that can be used as a tensor
-
-                label_inputs_1 = tf.nn.embedding_lookup(
-                    label_embedding, label_inputs, name="label_lookup"
-                )
-
-        # inputs = tf.unstack(inputs, num=num_steps, axis=1)
         word_vocab_size = max(word_data_dict.sizes)
         label_vocab_size = label_data_dict.vocab_size
-        # seq_length = tf.placeholder_with_default([0.0], shape=[None])
-        d_seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
-        # qz = q_net(word_inputs, seq_length, params.batch_size)
 
         zglobal_sample = tf.placeholder(
             dtype=tf.float64, shape=[None, params.latent_size]
         )
-        zsent_sample = tf.placeholder(
-            dtype=tf.float64, shape=[None, params.latent_size]
-        )
-        inp_logits = tf.placeholder(
-            dtype=tf.float64, shape=[None, params.label_embed_size]
-        )
 
-        word_logits, label_logits, _, _, l_smpl, w_smpl, zs, dec_word_states, dec_label_states = decoder(
+        word_logits, label_logits, _, _, _, _, _, _, _ = decoder(
             zglobal_sample,
-            params.batch_size,
+            1,  # batch_size
             word_vocab_size,
             label_vocab_size,
             max_sent_len,
-            gen_mode=True,
-            zsent=zsent_sample,
-            inp_logits=inp_logits
         )
 
         saver = tf.train.Saver()
@@ -161,222 +105,106 @@ def main(params):
             )
             try:
 
-                path = "./models_ckpts_" + params.name + "/vae_lstm_model-11900"
-                # print(path)
+                # path = "./models_ckpts_"+params.name+"/vae_lstm_model-11900"
+                path = params.ckpt_path
+                print('*** Loading checkpoint:', path)
                 # chkp.print_tensors_in_checkpoint_file(path, tensor_name='', all_tensors=True)
                 saver.restore(sess, path)
-                print("Model Restored")
+                print("*** Model Restored")
             except:
                 print("-----exception occurred while loading checkpoints-----")
                 exit()
                 # traceback.print_exc()
 
-            total_parameters = 0
-            #print_vars("trainable variables")
-            for i, variable in enumerate(tf.trainable_variables()):
-                # shape is an array of tf.Dimension
-                shape = variable.get_shape()
-                print('{} {} {}'.format(i, variable.name, shape))
-                variable_parameters = 1
-                for dim in shape:
-                    variable_parameters *= dim.value
-                total_parameters += variable_parameters
-            print("Total params:", total_parameters)
-            print("#Operations:", len(graph.get_operations()))
-
             batch_size = 1
-            # number_of_samples=params.number_of_samples
-            number_of_samples = 10000
+            number_of_samples = params.num_samples
             same_context_sentences = 1
             out_sentence_file = "./generated_words.txt"
             out_labels_file = "./generated_labels.txt"
 
-            f1 = open(out_sentence_file, 'w+')
-            f2 = open(out_labels_file, 'w+')
+            with open(out_sentence_file,
+                      'w+') as sent_f, open(out_labels_file, 'w+') as label_f:
 
-            print("----------------------SENTENCES------------------------\n\n")
-            for num in range(number_of_samples):
-                params.is_training = False
+                for num in tqdm(range(number_of_samples)):
+                    params.is_training = False
 
-                sentence = ['<BOS>']
-                label_seq = ['4']
-                state = None
-                input_sent_vect = [
-                    word_data_dict.word2idx[word] for word in sentence
-                ]
-                z = np.random.normal(0, 1, (1, params.latent_size))
+                    z = np.random.normal(0, 1, (1, params.latent_size))
+                    w_logits, l_logits = sess.run(
+                        [word_logits, label_logits],
+                        feed_dict={zglobal_sample: z}
+                    )
+                    w_logits = w_logits.reshape((max_sent_len, word_vocab_size))
+                    l_logits = l_logits.reshape(
+                        (max_sent_len, label_vocab_size)
+                    )
 
-                ###initialising random variables for label decoder
-                z_1 = np.random.normal(0, 1, (1, params.latent_size))
-                l_1 = np.random.rand(1, params.label_embed_size)
+                    # w_softmax = softmax(w_logits)
+                    l_softmax = softmax(l_logits)
 
-                for i in range(params.gen_length):
-                    # generate until <EOS> tag
-                    if "5" in label_seq:
-                        break
-                    input_label_vect = [
-                        label_data_dict.word2idx[word] for word in label_seq
+                    labels_idx = [
+                        np.random.choice(label_vocab_size, size=1, p=smax)[0]
+                        for smax in l_softmax
                     ]
-                    feed = {
-                        d_label_inputs:
-                            np.array(input_label_vect).reshape(
-                                [1, len(input_label_vect)]
-                            ),
-                        zsent_sample:
-                            z_1,
-                        inp_logits:
-                            l_1,
-                        seq_length: [len(input_label_vect)],
-                        zglobal_sample:
-                            z,
-                        d_word_inputs:
-                            np.array(input_sent_vect).reshape(
-                                [1, len(input_sent_vect)]
-                            )
-                    }
-                    # for the first decoder step, the state is None
-                    # if state is not None:
-                    #      feed.update({in_state: state})
-                    a, index = sess.run([label_logits, l_smpl], feed)
-                    # print(a,a.shape)
-                    if (i == 0):
-                        logit_arr = np.array(a)
-                    else:
-                        logit_arr = np.concatenate((logit_arr, a))
+                    labels = [label_data_dict.idx2word[i] for i in labels_idx]
 
-                    # print(index)
-                    # exit()
-                    index = index[0]
-                    label_seq += [label_data_dict.idx2word[int(index)]]
-                label_seq = [
-                    word for word in label_seq if word not in ['3', '4']
-                ]
-                label_out = ' '.join(label_seq)
-                print(label_out, len(label_seq))
-                # print(logit_arr)
-                print(logit_arr.shape)
-                # exit()
-
-                sizes = word_data_dict.sizes
-                for num in range(same_context_sentences):
-                    print(num)
-                    i = 0
-                    z_sent_sample = sess.run(zs, feed)
-
+                    sizes = word_data_dict.sizes
                     b1 = sizes[0]
                     b2 = sizes[0] + sizes[1]
                     b3 = sizes[0] + sizes[1] + sizes[2]
-                    sentence = ['<BOS>']
-                    while (i < len(label_seq)):
-                        # for i in range(len(label_seq)):
-                        # generate until <EOS> tag
+                    b4 = sizes[0] + sizes[1] + sizes[2] + sizes[3]
+                    b5 = sizes[0] + sizes[1] + sizes[2] + sizes[3] + sizes[4]
 
-                        input_sent_vect = [
-                            word_data_dict.word2idx[word] for word in sentence
-                        ]
-                        feed = {
-                            d_label_inputs:
-                                np.array(input_label_vect).reshape(
-                                    [1, len(input_label_vect)]
-                                ),
-                            zsent_sample:
-                                z_sent_sample,
-                            inp_logits:
-                                logit_arr[:i + 1],
-                            seq_length: [len(input_sent_vect)],
-                            zglobal_sample:
-                                z,
-                            d_word_inputs:
-                                np.array(input_sent_vect).reshape(
-                                    [1, len(input_sent_vect)]
-                                )
-                        }
-                        tmp = np.array(input_sent_vect).reshape(
-                            [1, len(input_sent_vect)]
-                        )
-                        # print(tmp, tmp.shape)
-                        # print(a,a.shape)
+                    # words_idx = []
+                    words = []
+                    for i, label in enumerate(labels):
+                        if label == '0':  # other(O)
+                            word_idx = np.random.choice(
+                                range(b1, b2),
+                                size=1,
+                                p=softmax(w_logits[i][:b2 - b1])
+                            )[0]
+                        elif label == '1':  # LOCATION
+                            word_idx = np.random.choice(
+                                range(b2, b3),
+                                size=1,
+                                p=softmax(w_logits[i][:b3 - b2])
+                            )[0]
+                        elif label == '2':  # PERSON
+                            word_idx = np.random.choice(
+                                range(b3, b4),
+                                size=1,
+                                p=softmax(w_logits[i][:b4 - b3])
+                            )[0]
+                        elif label == '3':  # ORGANIZATION
+                            word_idx = np.random.choice(
+                                range(b4, b5),
+                                size=1,
+                                p=softmax(w_logits[i][:b5 - b4])
+                            )[0]
+                        elif label == '4':
+                            words.append('<BOS>')
+                            continue
+                        elif label == '5':
+                            words.append('<EOS>')
+                            continue
+                        elif label == '6':
+                            words.append('<UNK>')
+                            continue
+                        elif label == '7':
+                            words.append('<PAD>')
+                            continue
+                        else:
+                            print('got unwanted label:', label)
+                            words.append('UNK')
+                            continue
 
-                        w_logits = sess.run(word_logits, feed)
-                        # print(w_logits)
-                        if (label_seq[i] == '0'):
-                            w_logits = w_logits[0][:sizes[1]]
-                            w_probs = softmax(w_logits)
-                            # index_arr=np.argsort(np.array(w_probs))
-                            index_arr = np.random.choice(
-                                len(w_probs), 5, p=w_probs
-                            )
-                            index_arr = index_arr + b1
+                        # words_idx.append(word_idx)
+                        words.append(word_data_dict.idx2word[word_idx])
 
-                        elif (label_seq[i] == '1'):
-                            w_logits = w_logits[0][:sizes[2]]
-                            w_probs = softmax(w_logits)
-                            # index_arr=np.argsort(np.array(w_probs))
-                            index_arr = np.random.choice(
-                                len(w_probs), 5, p=w_probs
-                            )
-                            index_arr = index_arr + b2
-
-                        elif (label_seq[i] == '2'):
-                            w_logits = w_logits[0][:sizes[0]]
-                            w_probs = softmax(w_logits)
-                            # index_arr=np.argsort(np.array(w_probs))
-                            index_arr = np.random.choice(
-                                len(w_probs), 5, p=w_probs
-                            )
-
-                        for j in index_arr:
-                            index = j
-                            word = word_data_dict.idx2word[int(index)]
-                            if (word != "<EOS>" and word != "<BOS>"):
-                                i += 1
-                                # print(i,index)
-                                # print(word)
-                                sentence += [word]
-
-                                break
-                        # print(w_logits)
-                        # print(w_logits.shape)
-                        # print(min(w_logits[0]),max(w_logits[0]))
-                        # exit()
-                        # print(label_seq[i])
-                        # if(label_seq[i]=='0'):
-                        #     # print(label_seq[i])
-                        #     req_logits=w_logits[0][sizes[0]:sizes[0]+sizes[1]]
-                        #     req_probs=softmax(req_logits)
-                        #     req_index=np.argmax(np.array(req_probs))
-                        #     index=sizes[0]+req_index
-                        # elif (label_seq[i]=='1'):
-                        #     # print(label_seq[i])
-                        #     req_logits=w_logits[0][(sizes[0]+sizes[1]):(sizes[0]+sizes[1]+sizes[2])]
-                        #     req_probs=softmax(req_logits)
-                        #     req_index=np.argmax(np.array(req_probs))
-                        #     index=sizes[0]+sizes[1]+req_index
-                        # elif (label_seq[i]=='2'):
-                        #     # print(label_seq[i])
-                        #     req_logits=w_logits[0][:sizes[0]]
-                        #     req_probs=softmax(req_logits)
-                        #     req_index=np.argmax(np.array(req_probs))
-                        #     index=req_index
-                        # # print(label_seq[i],i,index)
-                        # print(b,b.shape)
-                        # print(index)
-
-                    sentence = [
-                        word for word in sentence
-                        if word not in ['<BOS>', '<EOS>']
-                    ]
-                    sentence_cm = ' '.join([w for w in sentence])
-                    print(sentence_cm, len(sentence))
-                    print("\n")
-                    f1.write(sentence_cm)
-                    f1.write("\n")
-                    f2.write(label_out)
-                    f2.write("\n")
-                print("-----------------------------------------\n")
-
-            f1.close()
-            f2.close()
+                    sent_f.write(' '.join(words))
+                    sent_f.write('\n')
+                    label_f.write(' '.join(labels))
+                    label_f.write('\n')
 
 
 if __name__ == "__main__":
