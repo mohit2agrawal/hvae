@@ -19,8 +19,6 @@ from utils.schedules import scheduler
 
 from tqdm import tqdm
 import pickle
-import logging
-from logging.handlers import RotatingFileHandler
 
 
 class PTBInput(object):
@@ -281,25 +279,9 @@ def main(params):
             #ptb_data = PTBInput(params.batch_size, train_data)
             num_iters = len(word_data) // params.batch_size
             cur_it = -1
-            iters, tlb_arr, klw_arr, kld_zg_arr, kld_zs_arr = [], [], [], [], []
-            alpha_arr, beta_arr = [], []
-            # wppl_arr = []
 
             all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
 
-            ## for debugging
-            file_idx = -1
-            # np.set_printoptions(linewidth=np.inf)
-            # logger = logging.getLogger()
-            # logger.setLevel(logging.DEBUG)
-            # ch = RotatingFileHandler(
-            #     'values/log', maxBytes=5 * 1024 * 1024 * 1024, backupCount=1
-            # )
-            # ch.setLevel(logging.DEBUG)
-            # # create formatter
-            # formatter = logging.Formatter('%(message)s')
-            # ch.setFormatter(formatter)
-            # logger.addHandler(ch)
             schedule = scheduler(
                 params.fn, params.num_epochs * num_iters, params.cycles,
                 params.cycle_proportion, params.beta_lag
@@ -365,69 +347,6 @@ def main(params):
                         beta: beta_v
                     }
 
-                    ## for debugging
-                    # z1a, z1b,z2a,z2b, z3a, z3b, kzg, kzs, tlb, klw, alpha_, beta_, grads_, lce, wce, l_logits, w_logits, zs_state, zg_state, zg_sample, d_wcs, d_lcs = sess.run(
-                    #     [
-                    #         Zsent_distribution[0], Zsent_distribution[1],
-                    #         Zglobal_distribition[0], Zglobal_distribition[1],
-                    #         Zsent_dec_distribution[0],
-                    #         Zsent_dec_distribution[1], neg_kld_zglobal,
-                    #         neg_kld_zsent, total_lower_bound, kl_term_weight,
-                    #         alpha, beta, gradients, l_cross_entr, w_cross_entr,
-                    #         label_logits, word_logits, zsent_state,
-                    #         zglobal_state,zglobal_sample,dec_word_states, dec_label_states
-                    #     ],
-                    #     feed_dict=feed
-                    # )
-
-                    # file_idx += 1
-                    # file_idx %= 5
-                    # file_idx_s = str(file_idx)
-
-                    # for i, x in enumerate(grads_):
-                    #     np.savetxt(
-                    #         'values/{:02d}_grads_{}'.format(i, file_idx),
-                    #         x,
-                    #         delimiter=','
-                    #     )
-                    # np.savetxt(
-                    #     'values/label_cross_entropy_' + file_idx_s,
-                    #     lce,
-                    #     delimiter=','
-                    # )
-                    # np.savetxt(
-                    #     'values/word_cross_entropy_' + file_idx_s,
-                    #     wce,
-                    #     delimiter=','
-                    # )
-                    # with open('values/vals_' + file_idx_s, 'w') as oof:
-                    #     oof.write('\n'.join(map(str, [kzg, kzs, tlb])))
-                    # with open('values/sent_idx_' + file_idx_s, 'w') as oof:
-                    #     oof.write(str(start_idx) + '\n' + str(end_idx))
-
-                    # np.savetxt('values/zs_mu_' + file_idx_s, z1a,delimiter=',')
-                    # np.savetxt('values/zs_logvar_' + file_idx_s, z1b,delimiter=',')
-                    # np.savetxt('values/zg_mu_' + file_idx_s, z2a,delimiter=',')
-                    # np.savetxt('values/zg_logvar_' + file_idx_s, z2b,delimiter=',')
-                    # np.savetxt('values/zs_dec_mu_' + file_idx_s, z3a,delimiter=',')
-                    # np.savetxt('values/zs_dec_logvar_' + file_idx_s, z3b,delimiter=',')
-                    # np.savetxt('values/zs_state_' + file_idx_s, zs_state,delimiter=',')
-                    # np.savetxt('values/zg_state_' + file_idx_s, zg_state,delimiter=',')
-                    # np.savetxt('values/word_logits_' + file_idx_s, w_logits,delimiter=',')
-                    # np.savetxt('values/label_logits_' + file_idx_s, l_logits,delimiter=',')
-                    # np.savetxt('values/zg_sample_' + file_idx_s, zg_sample,delimiter=',')
-                    # np.savetxt('values/dec_word_states_' + file_idx_s, d_wcs,delimiter=',')
-                    # np.savetxt('values/dec_label_states_' + file_idx_s, d_lcs,delimiter=',')
-
-                    # logger.info('zs_mu %s', z1a.tolist())
-                    # logger.info('zs_logvar %s', z1b.tolist())
-                    # logger.info('zs_dec_mu %s', z3a.tolist())
-                    # logger.info('zs_dec_logvar %s', z3b.tolist())
-                    # logger.info('zs_state %s', zs_state.tolist())
-                    # logger.info('zg_state %s', zg_state.tolist())
-                    # logger.info('w_logits %s', w_logits.tolist())
-                    # logger.info('l_logits %s', l_logits.tolist())
-
                     z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, o, alpha_, beta_ = sess.run(
                         [
                             Zsent_distribution[0], Zsent_distribution[1],
@@ -438,11 +357,6 @@ def main(params):
                         ],
                         feed_dict=feed
                     )
-
-                    # for i, x in enumerate(clipped_grads_):
-                    #     np.savetxt(
-                    #         'values/{:02d}_clipped'.format(i), x, delimiter=','
-                    #     )
 
                     all_alpha.append(alpha_v)
                     all_beta.append(beta_v)
@@ -470,28 +384,7 @@ def main(params):
                         )
                         # print(model_path_name)
 
-                # avg_tlb = total_tlb / num_iters
-                # # avg_wppl = total_wppl / num_iters
-                # avg_klw = total_klw / num_iters
-                # avg_kld_zg = total_kld_zg / num_iters
-                # avg_kld_zs = total_kld_zs / num_iters
-
-                # iters.append(e)
-                # tlb_arr.append(avg_tlb)
-                # # wppl_arr.append(avg_wppl)
-                # klw_arr.append(avg_klw)
-                # kld_zg_arr.append(avg_kld_zg)
-                # kld_zs_arr.append(avg_kld_zs)
-                # alpha_arr.append(alpha_)
-                # beta_arr.append(beta_)
-
                 print("Time Taken:", datetime.datetime.now() - epoch_start_time)
-
-                # plot_filename = "./plot_values_{}.txt".format(params.num_epochs)
-                # write_lists_to_file(
-                #     plot_filename, iters, tlb_arr, klw_arr, kld_zg_arr,
-                #     kld_zs_arr, alpha_arr, beta_arr
-                # )
 
 
 if __name__ == "__main__":
