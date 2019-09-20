@@ -15,6 +15,7 @@ from hvae_model import decoder, encoder
 from utils import parameters
 from utils.beam_search import beam_search
 from utils.ptb import reader
+from utils.schedules import scheduler
 
 from tqdm import tqdm
 import pickle
@@ -57,25 +58,27 @@ def write_lists_to_file(filename, *lists):
 
 
 def main(params):
-    if params.input_ == 'PTB':
-        # data_folder = './DATA/parallel_data_10k/'
-        data_folder = './DATA/ptb/'
-        # data in form [data, labels]
-        train_data_raw, train_label_raw = data_.ptb_read(data_folder)
-        word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict = data_.prepare_data(
-            train_data_raw, train_label_raw, params, data_folder
-        )
+    # data_folder = './DATA/parallel_data_10k/'
+    data_folder = {
+        'ptb': './DATA/ptb/',
+        'ptb_ner': './DATA/ptb_ner'
+    }.get(params.name)
+    # data in form [data, labels]
+    train_data_raw, train_label_raw = data_.ptb_read(data_folder)
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict = data_.prepare_data(
+        train_data_raw, train_label_raw, params, data_folder
+    )
 
-        train_label_raw, valid_label_raw, test_label_raw = label_data_.ptb_read(
-            data_folder
-        )
-        label_data, label_labels_arr, label_embed_arr, label_data_dict = label_data_.prepare_data(
-            train_label_raw, params
-        )
+    train_label_raw, valid_label_raw, test_label_raw = label_data_.ptb_read(
+        data_folder
+    )
+    label_data, label_labels_arr, label_embed_arr, label_data_dict = label_data_.prepare_data(
+        train_label_raw, params
+    )
 
-        max_sent_len = max(
-            max(map(len, word_data)), max(map(len, encoder_word_data))
-        )
+    max_sent_len = max(
+        max(map(len, word_data)), max(map(len, encoder_word_data))
+    )
 
     with tf.Graph().as_default() as graph:
 
@@ -126,8 +129,7 @@ def main(params):
                 )
 
         # inputs = tf.unstack(inputs, num=num_steps, axis=1)
-        sizes = word_data_dict.sizes
-        word_vocab_size = max(sizes[1], sizes[2], sizes[0])
+        word_vocab_size = max(word_data_dict.sizes)
         label_vocab_size = label_data_dict.vocab_size
         # seq_length = tf.placeholder_with_default([0.0], shape=[None])
         d_seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
@@ -278,7 +280,7 @@ def main(params):
             summary_writer.add_graph(sess.graph)
             #ptb_data = PTBInput(params.batch_size, train_data)
             num_iters = len(word_data) // params.batch_size
-            cur_it = 0
+            cur_it = -1
             iters, tlb_arr, klw_arr, kld_zg_arr, kld_zs_arr = [], [], [], [], []
             alpha_arr, beta_arr = [], []
             # wppl_arr = []
@@ -298,6 +300,10 @@ def main(params):
             # formatter = logging.Formatter('%(message)s')
             # ch.setFormatter(formatter)
             # logger.addHandler(ch)
+            schedule = scheduler(
+                params.fn, params.num_epochs * num_iters, params.cycles,
+                params.cycle_proportion, params.beta_lag
+            )
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
                 print("Epoch: {} started at: {}".format(e, epoch_start_time))
@@ -308,30 +314,13 @@ def main(params):
                 total_kld_zs = 0
 
                 ## alpha, beta schedule
-                if cur_it >= 8000:
-                    break
+                # if cur_it >= 8000:
+                #     break
                 for it in tqdm(range(num_iters)):
-                    if cur_it >= 8000:
-                        break
-
-                    # alpha_v = beta_v = min(1, float(cur_it%(20*num_iters))/(15*num_iters))
-                    alpha_v = beta_v = 1
-                    if cur_it < 6000:
-                        alpha_v = 0.5 * (
-                            1 - np.cos(np.pi * float(cur_it) / 6000)
-                        )
-                    if cur_it < 7000:
-                        beta_v = 0.5 * (
-                            1 - np.cos(np.pi * float(cur_it - 1000) / 6000)
-                        )
-                    if cur_it < 1000:
-                        beta_v = 0
-                    # alpha_v = beta_v = 0.1
-
-                    # if cur_it%700<200:
-                    #     alpha_v = beta_v = 0
-                    # else:
-                    #     alpha_v = beta_v = min(1, float((cur_it%700)-200)/400)
+                    # if cur_it >= 8000:
+                    #     break
+                    cur_it += 1
+                    alpha_v, beta_v = schedule(cur_it)
 
                     params.is_training = True
                     start_idx = it * params.batch_size
@@ -345,6 +334,11 @@ def main(params):
                     sent_dec_l_batch = word_labels_arr[start_idx:end_idx]
                     sent_l_batch = encoder_word_data[start_idx:end_idx]
                     label_l_batch = label_labels_arr[start_idx:end_idx]
+                    #print(type(label_l_batch))
+                    #print(label_l_batch)
+                    #print(pad)
+                    #print([len(x) for x in label_l_batch])
+                    #print([len(x) for x in sent_l_batch])
 
                     # not optimal!!
                     length_ = np.array([len(sent) for sent in sent_batch]
@@ -357,6 +351,10 @@ def main(params):
                     sent_l_batch = zero_pad(sent_l_batch, pad)
                     label_l_batch = zero_pad(label_l_batch, pad)
 
+                    #print('-' * 20)
+                    #print(type(label_l_batch))
+                    #print(label_l_batch)
+                    #print([len(x) for x in label_l_batch])
                     feed = {
                         word_inputs: sent_l_batch,
                         label_inputs: label_l_batch,
@@ -462,7 +460,6 @@ def main(params):
                     total_klw += klw
                     total_kld_zg += -kzg
                     total_kld_zs += -kzs
-                    cur_it += 1
                     if cur_it % 100 == 0 and cur_it != 0:
                         path_to_save = os.path.join(
                             params.MODEL_DIR, "vae_lstm_model"
@@ -473,28 +470,28 @@ def main(params):
                         )
                         # print(model_path_name)
 
-                avg_tlb = total_tlb / num_iters
-                # avg_wppl = total_wppl / num_iters
-                avg_klw = total_klw / num_iters
-                avg_kld_zg = total_kld_zg / num_iters
-                avg_kld_zs = total_kld_zs / num_iters
+                # avg_tlb = total_tlb / num_iters
+                # # avg_wppl = total_wppl / num_iters
+                # avg_klw = total_klw / num_iters
+                # avg_kld_zg = total_kld_zg / num_iters
+                # avg_kld_zs = total_kld_zs / num_iters
 
-                iters.append(e)
-                tlb_arr.append(avg_tlb)
-                # wppl_arr.append(avg_wppl)
-                klw_arr.append(avg_klw)
-                kld_zg_arr.append(avg_kld_zg)
-                kld_zs_arr.append(avg_kld_zs)
-                alpha_arr.append(alpha_)
-                beta_arr.append(beta_)
+                # iters.append(e)
+                # tlb_arr.append(avg_tlb)
+                # # wppl_arr.append(avg_wppl)
+                # klw_arr.append(avg_klw)
+                # kld_zg_arr.append(avg_kld_zg)
+                # kld_zs_arr.append(avg_kld_zs)
+                # alpha_arr.append(alpha_)
+                # beta_arr.append(beta_)
 
                 print("Time Taken:", datetime.datetime.now() - epoch_start_time)
 
-                plot_filename = "./plot_values_{}.txt".format(params.num_epochs)
-                write_lists_to_file(
-                    plot_filename, iters, tlb_arr, klw_arr, kld_zg_arr,
-                    kld_zs_arr, alpha_arr, beta_arr
-                )
+                # plot_filename = "./plot_values_{}.txt".format(params.num_epochs)
+                # write_lists_to_file(
+                #     plot_filename, iters, tlb_arr, klw_arr, kld_zg_arr,
+                #     kld_zs_arr, alpha_arr, beta_arr
+                # )
 
 
 if __name__ == "__main__":

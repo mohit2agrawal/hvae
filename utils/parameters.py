@@ -1,13 +1,25 @@
+import argparse
+import os
+
+
+def float_limited(x):
+    '''only accept float values in range [0,1]'''
+    x = float(x)
+    if x < 0 or x > 1:
+        raise argparse.ArgumentTypeError('float value in range [0,1] expected')
+    return x
+
+
 class Parameters():
     # general parameters
     anneal_value = 1
     debug = True
     # name = "rVACS_kl"
-    name = "ptb"
+    name = "ptb_ner"
     number_of_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 10
-    num_epochs = 2000
+    num_epochs = 75
     learning_rate = 0.0001
     batch_size = 32
     # for decoding
@@ -32,7 +44,7 @@ class Parameters():
     # data
     datasets = ['GOT', 'PTB']
     embed_size = 300  # std=353, inputless_dec=499
-    label_embed_size = 6
+    label_embed_size = 8
     sent_max_size = 1000
     input_ = datasets[1]
     debug = False
@@ -49,8 +61,6 @@ class Parameters():
     base_cell = 'lstm'  # or GRU
 
     def parse_args(self):
-        import argparse
-        import os
         parser = argparse.ArgumentParser(
             description="Specify some parameters, all parameters "
             "also can be directly specified in Parameters class"
@@ -113,6 +123,28 @@ class Parameters():
         )
         parser.add_argument('--gpu', default="0", help="specify GPU number")
 
+        parser.add_argument(
+            '--cycles', default=1, type=int, help="number of cycles"
+        )
+        parser.add_argument(
+            '--cycle_proportion',
+            default=0.5,
+            type=float_limited,
+            help="proportion of cycle used to increase alpha and beta"
+        )
+        parser.add_argument(
+            '--fn',
+            default="linear",
+            choices=["linear", "tanh", "cosine"],
+            help="function used for increasing alpha"
+        )
+        parser.add_argument(
+            '--beta_lag',
+            default=0,
+            type=float,
+            help="proportion of cycle beta lags behind alpha"
+        )
+
         args = parser.parse_args()
         self.input_ = args.data
         self.learning_rate = float(args.lr)
@@ -126,6 +158,25 @@ class Parameters():
         self.decode = args.decode
         self.encode = args.encode
         self.vocab_drop = int(args.vocab_drop)
+
+        self.cycles = args.cycles
+        self.cycle_proportion = args.cycle_proportion
+        self.fn = args.fn
+        self.beta_lag = args.beta_lag
+
         # uncomment to make it GPU
         # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         # os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+
+def test():
+    params = Parameters()
+    params.parse_args()
+    print(type(params.cycles), params.cycles)
+    print(type(params.cycle_proportion), params.cycle_proportion)
+    print(type(params.fn), params.fn)
+    print(type(params.beta_lag), params.beta_lag)
+
+
+if __name__ == '__main__':
+    test()

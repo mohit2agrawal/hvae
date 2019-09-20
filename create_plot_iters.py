@@ -13,8 +13,8 @@ with open(filename) as f:
     beta_arr = [float(x) for x in f.readline().strip().split(" ")]
     tlb_arr = [float(x) for x in f.readline().strip().split(" ")]
     klw_arr = [float(x) for x in f.readline().strip().split(" ")]
-    kld_zg_arr = [-float(x) for x in f.readline().strip().split(" ")]
-    kld_zs_arr = [-float(x) for x in f.readline().strip().split(" ")]
+    kld_zg_arr = [float(x) for x in f.readline().strip().split(" ")]
+    kld_zs_arr = [float(x) for x in f.readline().strip().split(" ")]
 
 import matplotlib as mpl
 
