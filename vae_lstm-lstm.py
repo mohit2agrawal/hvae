@@ -63,16 +63,16 @@ def main(params):
     }.get(params.name)
     # data in form [data, labels]
     train_data_raw, train_label_raw = data_.ptb_read(data_folder)
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict = data_.prepare_data(
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, label_data, label_labels_arr, label_embed_arr = data_.prepare_data(
         train_data_raw, train_label_raw, params, data_folder
     )
 
-    train_label_raw, valid_label_raw, test_label_raw = label_data_.ptb_read(
-        data_folder
-    )
-    label_data, label_labels_arr, label_embed_arr, label_data_dict = label_data_.prepare_data(
-        train_label_raw, params
-    )
+    # train_label_raw, valid_label_raw, test_label_raw = label_data_.ptb_read(
+    #     data_folder
+    # )
+    # label_data, label_labels_arr, label_embed_arr, label_data_dict = label_data_.prepare_data(
+    #     train_label_raw, params
+    # )
 
     max_sent_len = max(
         max(map(len, word_data)), max(map(len, encoder_word_data))
