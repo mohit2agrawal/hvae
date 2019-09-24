@@ -69,8 +69,10 @@ class Dictionary(object):
         self._word2idx = {}
         self._idx2word = {}
         self._words = []
-        self._hindi_words = []
-        self._english_words = []
+        self._other_words = []
+        self._location_words = []
+        self._person_words = []
+        self._org_words = []
         self._vocab = []
         self._sizes = []
         self.get_words(self._sentences, self._labels)
@@ -130,11 +132,13 @@ class Dictionary(object):
                 if word in ["<EOS>", "<BOS>", "<PAD>", "<UNK>"]:
                     self._words.append(word)
                 elif (labels[i][j] == '0'):
-                    self._english_words.append(word.lower())
+                    self._other_words.append(word.lower())
                 elif (labels[i][j] == '1'):
-                    self._hindi_words.append(word.lower())
+                    self._location_words.append(word.lower())
                 elif (labels[i][j] == '2'):
-                    self._words.append(word.lower())
+                    self._person_words.append(word.lower())
+                elif (labels[i][j] == '3'):
+                    self._org_words.append(word.lower())
 
     def _mod_sentences(self, sentences, labels):
         # for every sentence, if word not in vocab set to <unk>
@@ -149,7 +153,7 @@ class Dictionary(object):
                     self.word2idx[sent[j]]
                 except:
                     sent[j] = '<unk>'
-                    lab[j] = '2'
+                    lab[j] = '6'
             sentences[i] = sent
             labels[i] = lab
 
@@ -164,24 +168,48 @@ class Dictionary(object):
             (wd, count) for wd, count in sorted_dict_words
             if count >= self._vocab_drop or wd in ['<unk>', '<BOS>', '<EOS>']
         ]
-        counter_h_words = collections.Counter(self._hindi_words)
+
+        counter_other_words = collections.Counter(self._other_words)
         # words, that occur less than 5 times dont include
-        sorted_dict_h_words = sorted(
-            counter_h_words.items(), key=lambda x: (-x[1], x[0])
+        sorted_dict_other_words = sorted(
+            counter_other_words.items(), key=lambda x: (-x[1], x[0])
         )
         # keep n words to be included in vocabulary
-        sorted_dict_h_words = [
-            (wd, count) for wd, count in sorted_dict_h_words
+        sorted_dict_other_words = [
+            (wd, count) for wd, count in sorted_dict_other_words
             if count >= self._vocab_drop or wd in ['<unk>', '<BOS>', '<EOS>']
         ]
-        counter_e_words = collections.Counter(self._english_words)
+
+        counter_location_words = collections.Counter(self._location_words)
         # words, that occur less than 5 times dont include
-        sorted_dict_e_words = sorted(
-            counter_e_words.items(), key=lambda x: (-x[1], x[0])
+        sorted_dict_location_words = sorted(
+            counter_location_words.items(), key=lambda x: (-x[1], x[0])
         )
         # keep n words to be included in vocabulary
-        sorted_dict_e_words = [
-            (wd, count) for wd, count in sorted_dict_e_words
+        sorted_dict_location_words = [
+            (wd, count) for wd, count in sorted_dict_location_words
+            if count >= self._vocab_drop or wd in ['<unk>', '<BOS>', '<EOS>']
+        ]
+
+        counter_person_words = collections.Counter(self._person_words)
+        # words, that occur less than 5 times dont include
+        sorted_dict_person_words = sorted(
+            counter_person_words.items(), key=lambda x: (-x[1], x[0])
+        )
+        # keep n words to be included in vocabulary
+        sorted_dict_person_words = [
+            (wd, count) for wd, count in sorted_dict_person_words
+            if count >= self._vocab_drop or wd in ['<unk>', '<BOS>', '<EOS>']
+        ]
+
+        counter_org_words = collections.Counter(self._org_words)
+        # words, that occur less than 5 times dont include
+        sorted_dict_org_words = sorted(
+            counter_org_words.items(), key=lambda x: (-x[1], x[0])
+        )
+        # keep n words to be included in vocabulary
+        sorted_dict_org_words = [
+            (wd, count) for wd, count in sorted_dict_org_words
             if count >= self._vocab_drop or wd in ['<unk>', '<BOS>', '<EOS>']
         ]
 
@@ -191,16 +219,24 @@ class Dictionary(object):
         # after sorting the dictionary, get ordered words
         all_words = []
         words, _ = list(zip(*sorted_dict_words))
-        e_words, _ = list(zip(*sorted_dict_e_words))
-        try:
-            h_words, _ = list(zip(*sorted_dict_h_words))
-        except:
-            h_words = list(zip(*sorted_dict_h_words))
+        other_words, _ = list(zip(*sorted_dict_other_words))
+        location_words, _ = list(zip(*sorted_dict_location_words))
+        person_words, _ = list(zip(*sorted_dict_person_words))
+        org_words, _ = list(zip(*sorted_dict_org_words))
 
         all_words.extend(words)
-        all_words.extend(e_words)
-        all_words.extend(h_words)
-        sizes = [len(words) + 1, len(e_words), len(h_words)]
+        all_words.extend(other_words)
+        all_words.extend(location_words)
+        all_words.extend(person_words)
+        all_words.extend(org_words)
+
+        sizes = [
+            len(words) + 1,
+            len(other_words),
+            len(location_words),
+            len(person_words),
+            len(org_words)
+        ]
         print(sizes)
         # print(all_words)
         # print(sizes)
@@ -311,6 +347,8 @@ def prepare_data(
     b1 = sizes[0]
     b2 = sizes[0] + sizes[1]
     b3 = sizes[0] + sizes[1] + sizes[2]
+    b4 = sizes[0] + sizes[1] + sizes[2] + sizes[3]
+    b5 = sizes[0] + sizes[1] + sizes[2] + sizes[3] + sizes[4]
 
     model_path = "./trained_embeddings_" + params.name
     filename = os.path.join(model_path, "embedding_file.pkl")
@@ -320,7 +358,6 @@ def prepare_data(
             embed_arr = pickle.load(rf)
 
     else:
-        hi_align_dictionary = FastVector(vector_file='wiki.hi.align.vec')
         en_align_dictionary = FastVector(vector_file='wiki.en.align.vec')
         print("loaded the files..")
 
@@ -331,34 +368,12 @@ def prepare_data(
             print(i)
             if i == 0:
                 continue
-            elif (i > 0 and i < b1):
-                try:
-                    embed_arr[i] = en_align_dictionary[data_dict.idx2word[i]]
-                    print(str(i), "english")
-                except:
-                    pass
-                try:
-                    embed_arr[i] = hi_align_dictionary[data_dict.idx2word[i]]
-                    print(str(i), "hindi")
-                except:
-                    embed_arr[i] = hi_align_dictionary["unk"]
-                    print(str(i), "unk")
-
-            elif (i >= b1 and i < b2):
-                try:
-                    embed_arr[i] = en_align_dictionary[data_dict.idx2word[i]]
-                    print(str(i), "english")
-                except:
-                    embed_arr[i] = hi_align_dictionary["unk"]
-                    print(str(i), "unk")
-
-            elif (i >= b2 and i < b3):
-                try:
-                    embed_arr[i] = hi_align_dictionary[data_dict.idx2word[i]]
-                    print(str(i), "hindi")
-                except:
-                    embed_arr[i] = hi_align_dictionary["unk"]
-                    print(str(i), "unk")
+            try:
+                embed_arr[i] = en_align_dictionary[data_dict.idx2word[i]]
+                print(str(i), "english")
+            except:
+                embed_arr[i] = en_align_dictionary["unk"]
+                print(str(i), "unk")
 
         print("Embedding created")
         if not os.path.exists(model_path):
@@ -402,8 +417,12 @@ def prepare_data(
             index = data_dict.word2idx[word]
             if (index >= b1 and index < b2):
                 a.append(index - b1)
-            elif (index >= b2):
+            elif (index >= b2 and index < b3):
                 a.append(index - b2)
+            elif (index >= b3 and index < b4):
+                a.append(index - b3)
+            elif (index >= b4):
+                a.append(index - b4)
             else:
                 a.append(index)
 

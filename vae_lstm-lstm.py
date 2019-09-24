@@ -77,14 +77,16 @@ def log_sum_exp(value, axis=None, keepdims=False):
 def calc_mi_q(mu, logvar, z_samples):
 
     # mu, logvar = Zsent_distribution
-    x_batch, nz = tf.shape(mu)
+    mu_shape = tf.shape(mu)
+    x_batch, nz = mu_shape[0], mu_shape[1]
 
     # [z_batch, 1, nz]
     z_samples = tf.expand_dims(z_samples, 1)
 
     # E_{q(z|x)}log(q(z|x)) = -0.5*nz*log(2*\pi) - 0.5*(1+logvar).sum(-1)
     neg_entropy = tf.reduce_mean(
-        -0.5 * nz * tf.log(2 * np.pi) - 0.5 * tf.reduce_sum(1 + logvar, -1)
+        -0.5 * tf.cast(tf.multiply(tf.cast(nz, dtype=tf.float64), tf.cast(tf.log(2 * np.pi), dtype=tf.float64)), dtype=tf.float64) -
+        0.5 * tf.cast(tf.reduce_sum(1 + logvar, -1), dtype=tf.float64)
     )
 
     # [1, x_batch, nz]
@@ -96,11 +98,11 @@ def calc_mi_q(mu, logvar, z_samples):
 
     # (z_batch, x_batch)
     log_density = -0.5 * tf.reduce_sum(tf.square(dev) / var, -1) \
-        - 0.5 * (nz * tf.log(2 * np.pi) + tf.reduce_sum(logvar, -1))
+        - 0.5 * (tf.multiply(tf.cast(nz, dtype=tf.float64), tf.cast(tf.log(2 * np.pi), dtype=tf.float64))) + tf.cast(tf.reduce_sum(logvar, -1), dtype=tf.float64)
 
     # log q(z): aggregate posterior
     # [z_batch]
-    log_qz = log_sum_exp(log_density, axis=1) - tf.log(x_batch)
+    log_qz = tf.cast(log_sum_exp(log_density, axis=1), dtype=tf.float64) - tf.log(tf.cast(x_batch, dtype=tf.float64))
 
     return tf.squeeze(neg_entropy - tf.reduce_mean(log_qz, -1))
 
@@ -302,13 +304,19 @@ def main(params):
         )
 
         mi_mu = tf.placeholder(
-            shape=[None, None], dtype=tf.float64, name="mi_mu"
+            shape=[params.batch_size, params.latent_size],
+            dtype=tf.float64,
+            name="mi_mu"
         )
         mi_logvar = tf.placeholder(
-            shape=[None, None], dtype=tf.float64, name="mi_logvar"
+            shape=[params.batch_size, params.latent_size],
+            dtype=tf.float64,
+            name="mi_logvar"
         )
         mi_samples = tf.placeholder(
-            shape=[None, None], dtype=tf.float64, name="mi_samples"
+            shape=[params.batch_size, params.latent_size],
+            dtype=tf.float64,
+            name="mi_samples"
         )
         mutual_info = calc_mi_q(mi_mu, mi_logvar, mi_samples)
 
@@ -386,6 +394,7 @@ def main(params):
             burn_num_words = 0
             burn_pre_loss = 1e4
             burn_cur_loss = 0
+            pre_mi = 0
 
             ## for debugging
             # file_idx = -1
@@ -494,9 +503,7 @@ def main(params):
 
                             ## weighted average on calc_mi_q
                             val_len = len(encoder_val_data)
-                            for val_it in range(
-                                val_len // params.batch_size + 1
-                            ):
+                            for val_it in range(val_len // params.batch_size):
                                 s_idx = val_it * params.batch_size
                                 e_idx = (val_it + 1) * params.batch_size
                                 word_input = encoder_val_data[s_idx:e_idx]
@@ -556,7 +563,7 @@ def main(params):
 
                             print("pre mi:%.4f. cur mi:%.4f" % (pre_mi, cur_mi))
                             if cur_mi - pre_mi < 0:
-                                aggressive_flag = False
+                                aggressive = False
                                 print("STOP BURNING")
                             pre_mi = cur_mi
 

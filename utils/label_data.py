@@ -24,7 +24,7 @@ def ptb_data_read(corpus_file, sent_file):
         for line in rf:
             # print(line)
             # print(line.strip().split(' '))
-            sentences.append(['3'] + line.strip().split(' ') + ['4'])
+            sentences.append(['4'] + line.strip().split(' ') + ['5'])
             # print(sentences)
     with open(sent_file, 'wb') as wf:
         pickle.dump(sentences, file=wf)
@@ -44,7 +44,6 @@ def ptb_read(data_path):
         sent_file="./trained_embeddings_" + params.name +
         "/val_labels_mod_new.pickle"
     )
-
     test_data = []
     return train_data, val_data, test_data
 
@@ -145,7 +144,7 @@ class Dictionary(object):
     def get_words(self, sentences):
         for sent in sentences:
             for word in sent:
-                word = word if word in ["4", "3"] else word.lower()
+                word = word if word in ["4", "5"] else word.lower()
                 self._words.append(word)
 
     def _mod_sentences(self, sentences):
@@ -154,11 +153,11 @@ class Dictionary(object):
             sent = sentences[i]
 
             for j in range(len(sent)):
-                sent[j] = sent[j] if sent[j] in ["3", "4"] else sent[j].lower()
+                sent[j] = sent[j] if sent[j] in ["4", "5"] else sent[j].lower()
                 try:
                     self.word2idx[sent[j]]
                 except:
-                    sent[j] = '2'
+                    sent[j] = '6'
             sentences[i] = sent
 
     def build_vocabulary(self):
@@ -168,7 +167,7 @@ class Dictionary(object):
         # keep n words to be included in vocabulary
         sorted_dict = [
             (wd, count) for wd, count in sorted_dict
-            if count >= self._vocab_drop or wd in ['2', '3', '4']
+            if count >= self._vocab_drop or wd in ['4', '5', '6']
         ]
         # after sorting the dictionary, get ordered words
         words, _ = list(zip(*sorted_dict))
@@ -177,8 +176,8 @@ class Dictionary(object):
         self._vocab_list = list(words)
         # print(words)
         # add <PAD> as zero
-        self._idx2word[0] = '5'
-        self._word2idx['5'] = 0
+        self._idx2word[0] = '7'
+        self._word2idx['7'] = 0
 
     def __len__(self):
         return len(self.idx2word)
