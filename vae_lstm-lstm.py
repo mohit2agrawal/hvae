@@ -28,9 +28,10 @@ class PTBInput(object):
         self.batch_size = batch_size = config.batch_size
         self.num_steps = num_steps = config.num_steps
         self.epoch_size = ((len(data) // batch_size) - 1) // num_steps
-        self.input_data, self.targets = reader.ptb_producer(
-            data, batch_size, num_steps, name=name
-        )
+        self.input_data, self.targets = reader.ptb_producer(data,
+                                                            batch_size,
+                                                            num_steps,
+                                                            name=name)
 
 
 def kld(p_mu, p_logvar, q_mu, q_logvar):
@@ -39,8 +40,7 @@ def kld(p_mu, p_logvar, q_mu, q_logvar):
     """
     return -0.5 * (
         1 + p_logvar - q_logvar -
-        (tf.square(p_mu - q_mu) + tf.exp(p_logvar)) / tf.exp(q_logvar)
-    )
+        (tf.square(p_mu - q_mu) + tf.exp(p_logvar)) / tf.exp(q_logvar))
 
 
 def zero_pad(sentences, max_len):
@@ -66,8 +66,7 @@ def log_sum_exp(value, axis=None, keepdims=False):
         if keepdims is False:
             m = tf.squeeze(m, axis)
         return m + tf.log(
-            tf.reduce_sum(tf.exp(value0), axis=axis, keepdims=keepdims)
-        )
+            tf.reduce_sum(tf.exp(value0), axis=axis, keepdims=keepdims))
     else:
         m = tf.reduce_max(value)
         sum_exp = tf.reduce_sum(tf.exp(value - m))
@@ -85,9 +84,11 @@ def calc_mi_q(mu, logvar, z_samples):
 
     # E_{q(z|x)}log(q(z|x)) = -0.5*nz*log(2*\pi) - 0.5*(1+logvar).sum(-1)
     neg_entropy = tf.reduce_mean(
-        -0.5 * tf.cast(tf.multiply(tf.cast(nz, dtype=tf.float64), tf.cast(tf.log(2 * np.pi), dtype=tf.float64)), dtype=tf.float64) -
-        0.5 * tf.cast(tf.reduce_sum(1 + logvar, -1), dtype=tf.float64)
-    )
+        -0.5 *
+        tf.cast(tf.multiply(tf.cast(nz, dtype=tf.float64),
+                            tf.cast(tf.log(2 * np.pi), dtype=tf.float64)),
+                dtype=tf.float64) -
+        0.5 * tf.cast(tf.reduce_sum(1 + logvar, -1), dtype=tf.float64))
 
     # [1, x_batch, nz]
     mu, logvar = tf.expand_dims(mu, 0), tf.expand_dims(logvar, 0)
@@ -97,12 +98,16 @@ def calc_mi_q(mu, logvar, z_samples):
     dev = z_samples - mu
 
     # (z_batch, x_batch)
-    log_density = -0.5 * tf.reduce_sum(tf.square(dev) / var, -1) \
-        - 0.5 * (tf.multiply(tf.cast(nz, dtype=tf.float64), tf.cast(tf.log(2 * np.pi), dtype=tf.float64))) + tf.cast(tf.reduce_sum(logvar, -1), dtype=tf.float64)
+    log_density = -0.5 * tf.reduce_sum(tf.square(dev) / var, -1) - 0.5 * (
+        tf.multiply(tf.cast(nz, dtype=tf.float64),
+                    tf.cast(tf.log(2 * np.pi), dtype=tf.float64))) + tf.cast(
+                        tf.reduce_sum(logvar, -1), dtype=tf.float64)
 
     # log q(z): aggregate posterior
     # [z_batch]
-    log_qz = tf.cast(log_sum_exp(log_density, axis=1), dtype=tf.float64) - tf.log(tf.cast(x_batch, dtype=tf.float64))
+    log_qz = tf.cast(log_sum_exp(log_density, axis=1),
+                     dtype=tf.float64) - tf.log(
+                         tf.cast(x_batch, dtype=tf.float64))
 
     return tf.squeeze(neg_entropy - tf.reduce_mean(log_qz, -1))
 
@@ -115,50 +120,44 @@ def main(params):
     }.get(params.name)
     # data in form [data, labels]
     train_data_raw, train_label_raw, val_data_raw, val_label_raw = data_.ptb_read(
-        data_folder
-    )
+        data_folder)
     word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, encoder_val_data = data_.prepare_data(
         train_data_raw, train_label_raw, val_data_raw, val_label_raw, params,
-        data_folder
-    )
+        data_folder)
 
     train_label_raw, val_label_raw, test_label_raw = label_data_.ptb_read(
-        data_folder
-    )
+        data_folder)
     label_data, label_labels_arr, label_embed_arr, label_data_dict, val_labels_arr = label_data_.prepare_data(
-        train_label_raw, val_label_raw, params
-    )
+        train_label_raw, val_label_raw, params)
 
-    max_sent_len = max(
-        max(map(len, word_data)), max(map(len, encoder_word_data))
-    )
+    max_sent_len = max(max(map(len, word_data)),
+                       max(map(len, encoder_word_data)))
     max_sent_len = max(max_sent_len, max(map(len, encoder_val_data)))
 
     with tf.Graph().as_default() as graph:
 
-        label_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="label_inputs"
-        )
-        word_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="word_inputs"
-        )
+        label_inputs = tf.placeholder(dtype=tf.int32,
+                                      shape=[None, None],
+                                      name="label_inputs")
+        word_inputs = tf.placeholder(dtype=tf.int32,
+                                     shape=[None, None],
+                                     name="word_inputs")
 
-        d_word_labels = tf.placeholder(
-            shape=[None, None], dtype=tf.int32, name="d_word_labels"
-        )
-        d_label_labels = tf.placeholder(
-            shape=[None, None], dtype=tf.int32, name="d_label_labels"
-        )
+        d_word_labels = tf.placeholder(shape=[None, None],
+                                       dtype=tf.int32,
+                                       name="d_word_labels")
+        d_label_labels = tf.placeholder(shape=[None, None],
+                                        dtype=tf.int32,
+                                        name="d_label_labels")
 
         with tf.device("/cpu:0"):
             if not params.pre_trained_embed:
                 word_embedding = tf.get_variable(
-                    "word_embedding", [data_dict.vocab_size, params.embed_size],
-                    dtype=tf.float64
-                )
-                vect_inputs = tf.nn.embedding_lookup(
-                    word_embedding, word_inputs
-                )
+                    "word_embedding",
+                    [data_dict.vocab_size, params.embed_size],
+                    dtype=tf.float64)
+                vect_inputs = tf.nn.embedding_lookup(word_embedding,
+                                                     word_inputs)
             else:
                 # [data_dict.vocab_size, params.embed_size]
                 word_embedding = tf.Variable(
@@ -167,9 +166,9 @@ def main(params):
                     name="word_embedding",
                     dtype=tf.float64
                 )  # creates a variable that can be used as a tensor
-                vect_inputs = tf.nn.embedding_lookup(
-                    word_embedding, word_inputs, name="word_lookup"
-                )
+                vect_inputs = tf.nn.embedding_lookup(word_embedding,
+                                                     word_inputs,
+                                                     name="word_lookup")
 
                 # val_vect_inputs = tf.nn.embedding_lookup(
                 #     word_embedding, val_word_inputs, name="word_lookup"
@@ -182,9 +181,9 @@ def main(params):
                     dtype=tf.float64
                 )  # creates a variable that can be used as a tensor
 
-                label_inputs_1 = tf.nn.embedding_lookup(
-                    label_embedding, label_inputs, name="label_lookup"
-                )
+                label_inputs_1 = tf.nn.embedding_lookup(label_embedding,
+                                                        label_inputs,
+                                                        name="label_lookup")
                 # val_label_inputs_1 = tf.nn.embedding_lookup(
                 #     label_embedding, val_label_inputs, name="label_lookup"
                 # )
@@ -198,46 +197,34 @@ def main(params):
         # qz = q_net(word_inputs, seq_length, params.batch_size)
 
         Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
-            vect_inputs, label_inputs_1, params.batch_size, max_sent_len
-        )
+            vect_inputs, label_inputs_1, params.batch_size, max_sent_len)
         word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _, dec_word_states, dec_label_states = decoder(
             zglobal_sample, params.batch_size, word_vocab_size,
-            label_vocab_size, max_sent_len
-        )
+            label_vocab_size, max_sent_len)
 
         neg_kld_zsent = -1 * tf.reduce_mean(
             tf.reduce_sum(
-                kld(
-                    Zsent_distribution[0], Zsent_distribution[1],
-                    Zsent_dec_distribution[0], Zsent_dec_distribution[1]
-                ),
-                axis=1
-            )
-        )
+                kld(Zsent_distribution[0], Zsent_distribution[1],
+                    Zsent_dec_distribution[0], Zsent_dec_distribution[1]),
+                axis=1))
         # neg_kld_zsent = tf.placeholder(tf.float64)
         neg_kld_zsent = tf.clip_by_value(neg_kld_zsent, -20000, 20000)
         neg_kld_zglobal = -1 * tf.reduce_mean(
             tf.reduce_sum(
-                kld(
-                    Zglobal_distribition[0], Zglobal_distribition[1],
-                    Zglobal_dec_distribution[0], Zglobal_dec_distribution[1]
-                ),
-                axis=1
-            )
-        )
+                kld(Zglobal_distribition[0], Zglobal_distribition[1],
+                    Zglobal_dec_distribution[0], Zglobal_dec_distribution[1]),
+                axis=1))
 
         # label reconstruction loss
         d_label_labels_flat = tf.reshape(d_label_labels, [-1])
         l_cross_entr = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=label_logits, labels=d_label_labels_flat
-        )
+            logits=label_logits, labels=d_label_labels_flat)
         l_mask_labels = tf.sign(tf.cast(d_label_labels_flat, dtype=tf.float64))
         l_masked_losses = l_mask_labels * l_cross_entr
         # reshape again
         l_masked_losses = tf.reshape(l_masked_losses, tf.shape(d_label_labels))
         l_mean_loss_by_example = tf.reduce_sum(
-            l_masked_losses, reduction_indices=1
-        ) / d_seq_length
+            l_masked_losses, reduction_indices=1) / d_seq_length
         label_rec_loss = tf.reduce_mean(l_mean_loss_by_example)
         # label_perplexity = tf.exp(label_rec_loss)
 
@@ -247,14 +234,13 @@ def main(params):
         d_word_labels_flat = tf.reshape(d_word_labels, [-1])
         print(d_word_labels_flat.shape)
         w_cross_entr = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=word_logits, labels=d_word_labels_flat
-        )
+            logits=word_logits, labels=d_word_labels_flat)
         w_mask_labels = tf.sign(tf.cast(d_word_labels_flat, dtype=tf.float64))
         w_masked_losses_1 = w_mask_labels * w_cross_entr
-        w_masked_losses = tf.reshape(w_masked_losses_1, tf.shape(d_word_labels))
+        w_masked_losses = tf.reshape(w_masked_losses_1,
+                                     tf.shape(d_word_labels))
         w_mean_loss_by_example = tf.reduce_sum(
-            w_masked_losses, reduction_indices=1
-        ) / d_seq_length
+            w_masked_losses, reduction_indices=1) / d_seq_length
         word_rec_loss = tf.reduce_mean(w_mean_loss_by_example)
         # word_perplexity = tf.exp(word_rec_loss)
 
@@ -277,47 +263,36 @@ def main(params):
 
         total_lower_bound = rec_loss + kl_term_weight
 
-        gradients = tf.gradients(
-            total_lower_bound, tf.trainable_variables(), name='gradients'
-        )
+        gradients = tf.gradients(total_lower_bound,
+                                 tf.trainable_variables(),
+                                 name='gradients')
         clipped_grad, _ = tf.clip_by_global_norm(gradients, 5, name='clipped')
-        opt = tf.train.AdamOptimizer(
-            learning_rate=params.learning_rate, name='adam'
-        )
+        opt = tf.train.AdamOptimizer(learning_rate=params.learning_rate,
+                                     name='adam')
         optimize = opt.apply_gradients(
-            zip(clipped_grad, tf.trainable_variables())
-        )
+            zip(clipped_grad, tf.trainable_variables()))
 
-        gradients_encoder = tf.gradients(
-            total_lower_bound,
-            tf.trainable_variables('encoder'),
-            name='gradients_encoder'
-        )
+        gradients_encoder = tf.gradients(total_lower_bound,
+                                         tf.trainable_variables('encoder'),
+                                         name='gradients_encoder')
         clipped_grad_encoder, _ = tf.clip_by_global_norm(
-            gradients_encoder, 5, name='clipped_encoder'
-        )
+            gradients_encoder, 5, name='clipped_encoder')
         opt_encoder = tf.train.AdamOptimizer(
-            learning_rate=params.learning_rate, name='adam_encoder'
-        )
+            learning_rate=params.learning_rate, name='adam_encoder')
         optimize_encoder = opt_encoder.apply_gradients(
-            zip(clipped_grad_encoder, tf.trainable_variables('encoder'))
-        )
+            zip(clipped_grad_encoder, tf.trainable_variables('encoder')))
 
-        mi_mu = tf.placeholder(
-            shape=[params.batch_size, params.latent_size],
-            dtype=tf.float64,
-            name="mi_mu"
-        )
+        mi_mu = tf.placeholder(shape=[params.batch_size, params.latent_size],
+                               dtype=tf.float64,
+                               name="mi_mu")
         mi_logvar = tf.placeholder(
             shape=[params.batch_size, params.latent_size],
             dtype=tf.float64,
-            name="mi_logvar"
-        )
+            name="mi_logvar")
         mi_samples = tf.placeholder(
             shape=[params.batch_size, params.latent_size],
             dtype=tf.float64,
-            name="mi_samples"
-        )
+            name="mi_samples")
         mutual_info = calc_mi_q(mi_mu, mi_logvar, mi_samples)
 
         # gradients_decoder = tf.gradients(
@@ -332,12 +307,10 @@ def main(params):
         config = tf.ConfigProto(device_count={'GPU': 0})
         with tf.Session(config=config) as sess:
             print("*********")
-            sess.run(
-                [
-                    tf.global_variables_initializer(),
-                    tf.local_variables_initializer()
-                ]
-            )
+            sess.run([
+                tf.global_variables_initializer(),
+                tf.local_variables_initializer()
+            ])
 
             ## save the values weights are initialized by
             # with tf.variable_scope("", reuse=True):
@@ -445,8 +418,8 @@ def main(params):
                     burn_sents_len = len(sent_l_batch[0])
 
                     # not optimal!!
-                    length_ = np.array([len(sent) for sent in sent_batch]
-                                       ).reshape(params.batch_size)
+                    length_ = np.array([len(sent) for sent in sent_batch
+                                        ]).reshape(params.batch_size)
 
                     # prepare encoder and decoder inputs to feed
                     sent_batch = zero_pad(sent_batch, pad)
@@ -467,27 +440,28 @@ def main(params):
 
                     if aggressive:
                         if sub_iter < 100:
+                            print('sub_iter:', sub_iter)
                             sub_iter += 1
                             ## aggressively optimize encoder
                             loss, _ = sess.run(
                                 [total_lower_bound, optimize_encoder],
-                                feed_dict=feed
-                            )
+                                feed_dict=feed)
 
                             if sub_iter % 15 == 0:
                                 ## TODO why -1?
-                                burn_num_words += (
-                                    burn_sents_len - 1
-                                ) * burn_batch_size
+                                burn_num_words += (burn_sents_len -
+                                                   1) * burn_batch_size
                                 burn_cur_loss += loss
                                 burn_cur_loss = burn_cur_loss / burn_num_words
                                 if burn_pre_loss - burn_cur_loss < 0:
                                     ## stop encoder only updates
                                     ## do one full VAE update
+                                    print('setting sub_iter=100')
                                     sub_iter = 100
                                     continue
                                 burn_pre_loss = burn_cur_loss
                                 burn_cur_loss = burn_num_words = 0
+                        ## Calculate MI
                         else:  ## if sub_iter >= 100
                             #
                             sub_iter = 0  ## try aggressive in next run
@@ -498,8 +472,6 @@ def main(params):
                             sent_mi = 0
                             global_mi = 0
                             num_examples = 0
-
-                            ## Calculate MI
 
                             ## weighted average on calc_mi_q
                             val_len = len(encoder_val_data)
@@ -535,34 +507,30 @@ def main(params):
                                         Zglobal_distribition, zglobal_sample,
                                         zsent_state, zglobal_state
                                     ],
-                                    feed_dict=feed
-                                )
-                                mi_s = sess.run(
-                                    mutual_info,
-                                    feed_dict={
-                                        mi_mu: zs_dist[0],
-                                        mi_logvar: zs_dist[1],
-                                        mi_samples: zs_sample
-                                    }
-                                )
+                                    feed_dict=feed)
+                                mi_s = sess.run(mutual_info,
+                                                feed_dict={
+                                                    mi_mu: zs_dist[0],
+                                                    mi_logvar: zs_dist[1],
+                                                    mi_samples: zs_sample
+                                                })
                                 sent_mi += mi_s * batch_size
 
-                                mi_g = sess.run(
-                                    mutual_info,
-                                    feed_dict={
-                                        mi_mu: zg_dist[0],
-                                        mi_logvar: zg_dist[1],
-                                        mi_samples: zg_sample
-                                    }
-                                )
+                                mi_g = sess.run(mutual_info,
+                                                feed_dict={
+                                                    mi_mu: zg_dist[0],
+                                                    mi_logvar: zg_dist[1],
+                                                    mi_samples: zg_sample
+                                                })
                                 global_mi += mi_g * batch_size
 
                             sent_mi /= num_examples
                             global_mi /= num_examples
                             cur_mi = sent_mi + global_mi
 
-                            print("pre mi:%.4f. cur mi:%.4f" % (pre_mi, cur_mi))
-                            if cur_mi - pre_mi < 0:
+                            print("pre mi:%.4f. cur mi:%.4f" %
+                                  (pre_mi, cur_mi))
+                            if 0 < cur_mi < pre_mi:
                                 aggressive = False
                                 print("STOP BURNING")
                             pre_mi = cur_mi
@@ -570,6 +538,7 @@ def main(params):
                     ## if not aggressive
                     else:
                         sub_iter = 0  ## try aggressive in next run
+                        print('aggressive:', aggressive, 'sub_iter:', sub_iter)
                         ## both decoder and encoder updates
                         z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, _, alpha_, beta_ = sess.run(
                             [
@@ -579,8 +548,7 @@ def main(params):
                                 neg_kld_zsent, total_lower_bound,
                                 kl_term_weight, optimize, alpha, beta
                             ],
-                            feed_dict=feed
-                        )
+                            feed_dict=feed)
 
                         all_alpha.append(alpha_v)
                         all_beta.append(beta_v)
@@ -588,10 +556,9 @@ def main(params):
                         all_kl.append(klw)
                         all_klzg.append(-kzg)
                         all_klzs.append(-kzs)
-                        write_lists_to_file(
-                            'test_plot.txt', all_alpha, all_beta, all_tlb,
-                            all_kl, all_klzg, all_klzs
-                        )
+                        write_lists_to_file('test_plot.txt', all_alpha,
+                                            all_beta, all_tlb, all_kl,
+                                            all_klzg, all_klzs)
 
                     # total_tlb += tlb
                     # # total_wppl += wppl
@@ -600,13 +567,12 @@ def main(params):
                     # total_kld_zs += -kzs
                     cur_it += 1
                     if cur_it % 100 == 0 and cur_it != 0:
-                        path_to_save = os.path.join(
-                            params.MODEL_DIR, "vae_lstm_model"
-                        )
+                        path_to_save = os.path.join(params.MODEL_DIR,
+                                                    "vae_lstm_model")
                         # print(path_to_save)
-                        model_path_name = saver.save(
-                            sess, path_to_save, global_step=cur_it
-                        )
+                        model_path_name = saver.save(sess,
+                                                     path_to_save,
+                                                     global_step=cur_it)
                         # print(model_path_name)
 
 
