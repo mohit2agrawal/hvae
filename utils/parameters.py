@@ -16,10 +16,10 @@ class Parameters():
     debug = True
     # name = "rVACS_kl"
     name = "ptb_ner"
-    number_of_samples = 200
+    num_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 10
-    num_epochs = 75
+    num_epochs = 15
     learning_rate = 0.0001
     batch_size = 32
     # for decoding
@@ -145,6 +145,17 @@ class Parameters():
             help="proportion of cycle beta lags behind alpha"
         )
 
+        parser.add_argument(
+            '--ckpt_path',
+            help="path to the checkpoint to load (for sampling/ generation)"
+        )
+        parser.add_argument(
+            '--num_samples',
+            type=int,
+            default=self.num_samples,
+            help="number of sentences to generate"
+        )
+
         args = parser.parse_args()
         self.input_ = args.data
         self.learning_rate = float(args.lr)
@@ -163,6 +174,9 @@ class Parameters():
         self.cycle_proportion = args.cycle_proportion
         self.fn = args.fn
         self.beta_lag = args.beta_lag
+
+        self.ckpt_path = args.ckpt_path
+        self.num_samples = args.num_samples
 
         # uncomment to make it GPU
         # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
