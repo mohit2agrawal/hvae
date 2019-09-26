@@ -59,7 +59,8 @@ def main(params):
     # data_folder = './DATA/parallel_data_10k/'
     data_folder = {
         'ptb': './DATA/ptb/',
-        'ptb_ner': './DATA/ptb_ner'
+        'ptb_ner': './DATA/ptb_ner',
+        'ptb_pos': './DATA/ptb_pos'
     }.get(params.name)
     # data in form [data, labels]
     train_data_raw, train_label_raw = data_.ptb_read(data_folder)
@@ -128,7 +129,7 @@ def main(params):
 
         # inputs = tf.unstack(inputs, num=num_steps, axis=1)
         word_vocab_size = max(word_data_dict.sizes)
-        label_vocab_size = label_data_dict.vocab_size
+        label_vocab_size = word_data_dict.label_vocab_size
         # seq_length = tf.placeholder_with_default([0.0], shape=[None])
         d_seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
         # qz = q_net(word_inputs, seq_length, params.batch_size)
@@ -281,41 +282,46 @@ def main(params):
             cur_it = -1
 
             all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
+            all_rl, all_wrl, all_lrl = [], [], []
 
             schedule = scheduler(
                 params.fn, params.num_epochs * num_iters, params.cycles,
                 params.cycle_proportion, params.beta_lag
             )
+            word_data = np.array(word_data)
+            label_data = np.array(label_data)
+            word_labels_arr = np.array(word_labels_arr)
+            encoder_word_data = np.array(encoder_word_data)
+            label_labels_arr = np.array(label_labels_arr)
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
                 print("Epoch: {} started at: {}".format(e, epoch_start_time))
-                total_tlb = 0
-                # total_wppl = 0
-                total_klw = 0
-                total_kld_zg = 0
-                total_kld_zs = 0
 
                 ## alpha, beta schedule
                 # if cur_it >= 8000:
                 #     break
+                rand_ids = np.random.permutation(len(word_data))
                 for it in tqdm(range(num_iters)):
                     # if cur_it >= 8000:
                     #     break
                     cur_it += 1
                     alpha_v, beta_v = schedule(cur_it)
+                    # beta_v, alpha_v = schedule(cur_it)
+                    beta_v = 1
 
                     params.is_training = True
                     start_idx = it * params.batch_size
                     end_idx = (it + 1) * params.batch_size
+                    indices = rand_ids[start_idx:end_idx]
 
                     # zero padding
                     pad = max_sent_len
 
-                    sent_batch = word_data[start_idx:end_idx]
-                    label_batch = label_data[start_idx:end_idx]
-                    sent_dec_l_batch = word_labels_arr[start_idx:end_idx]
-                    sent_l_batch = encoder_word_data[start_idx:end_idx]
-                    label_l_batch = label_labels_arr[start_idx:end_idx]
+                    sent_batch = word_data[indices]
+                    label_batch = label_data[indices]
+                    sent_dec_l_batch = word_labels_arr[indices]
+                    sent_l_batch = encoder_word_data[indices]
+                    label_l_batch = label_labels_arr[indices]
                     #print(type(label_l_batch))
                     #print(label_l_batch)
                     #print(pad)
@@ -347,13 +353,13 @@ def main(params):
                         beta: beta_v
                     }
 
-                    z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, o, alpha_, beta_ = sess.run(
+                    z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, o, rl, lrl, wrl = sess.run(
                         [
                             Zsent_distribution[0], Zsent_distribution[1],
                             Zsent_dec_distribution[0],
                             Zsent_dec_distribution[1], neg_kld_zglobal,
                             neg_kld_zsent, total_lower_bound, kl_term_weight,
-                            optimize, alpha, beta
+                            optimize, rec_loss, label_rec_loss, word_rec_loss
                         ],
                         feed_dict=feed
                     )
@@ -364,16 +370,14 @@ def main(params):
                     all_kl.append(klw)
                     all_klzg.append(-kzg)
                     all_klzs.append(-kzs)
+                    all_rl.append(rl)
+                    all_lrl.append(lrl)
+                    all_wrl.append(wrl)
                     write_lists_to_file(
                         'test_plot.txt', all_alpha, all_beta, all_tlb, all_kl,
-                        all_klzg, all_klzs
+                        all_klzg, all_klzs, all_rl, all_lrl, all_wrl
                     )
 
-                    total_tlb += tlb
-                    # total_wppl += wppl
-                    total_klw += klw
-                    total_kld_zg += -kzg
-                    total_kld_zs += -kzs
                     if cur_it % 100 == 0 and cur_it != 0:
                         path_to_save = os.path.join(
                             params.MODEL_DIR, "vae_lstm_model"

@@ -84,19 +84,20 @@ class Dictionary(object):
         self._labels_set = sorted(words_per_label.keys())
 
         all_words = self.specials[:]
+        sizes = [len(self.specials)]
         for label in self._labels_set:
             all_words.extend(words_per_label[label])
-        sizes = [len(self.specials)]
-        sizes += [len(words_per_label[label]) for label in self._labels_set]
+            sizes.append(len(words_per_label[label]))
         print('sizes:', sizes)
+
+        self._vocab = all_words
+        self._sizes = sizes
 
         ## for words
         self._word2idx = dict(zip(all_words, range(len(all_words))))
         self._idx2word = dict(zip(range(len(all_words)), all_words))
         assert self._idx2word[0] == self.pad
         assert self._word2idx[self.pad] == 0
-        self._vocab = all_words
-        self._sizes = sizes
 
         ## for labels
         all_labels = self.specials + self._labels_set
@@ -113,6 +114,10 @@ class Dictionary(object):
     @property
     def vocab_size(self):
         return len(self._idx2word)
+
+    @property
+    def label_vocab_size(self):
+        return len(self._l_idx2word)
 
     @property
     def sizes(self):
@@ -372,7 +377,7 @@ def prepare_data(data_raw, labels_raw, params, data_path):
 
         embed_arr = np.zeros([data_dict.vocab_size, params.embed_size])
         for i in range(1, embed_arr.shape[0]):
-            print(i)
+            # print(i)
             try:
                 embed_arr[i] = en_align_dictionary[data_dict.idx2word[i]]
                 # print(str(i), "english")
@@ -414,7 +419,7 @@ def prepare_data(data_raw, labels_raw, params, data_path):
     ]
 
     sizes = data_dict.sizes
-    to_subtract = []
+    to_subtract = [0]
     i = 0
     s = 0
     for i in range(len(sizes) - 1):
@@ -434,11 +439,12 @@ def prepare_data(data_raw, labels_raw, params, data_path):
         encoder_data_adjusted_idx.append(a)
 
     ## label encodings
-    label_embed_arr = np.zeros(
-        [len(data_dict.l_word2idx.keys()), params.label_embed_size]
-    )
-    for i in range(len(data_dict.l_word2idx.keys())):
-        label_embed_arr[i][i] = 1
+    # label_embed_arr = np.zeros(
+    #     [len(data_dict.l_word2idx.keys()), params.label_embed_size]
+    # )
+    # for i in range(len(data_dict.l_word2idx.keys())):
+    #     label_embed_arr[i][i] = 1
+    label_embed_arr = np.eye(len(data_dict.l_word2idx.keys()))
     labels = [
         [data_dict.l_word2idx[word] for word in sent[:-1]]
         for sent in data_dict.labels if len(sent) < params.sent_max_size - 2

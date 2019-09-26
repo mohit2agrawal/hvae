@@ -15,11 +15,11 @@ class Parameters():
     anneal_value = 1
     debug = True
     # name = "rVACS_kl"
-    name = "ptb_ner"
+    name = "ptb_pos"
     num_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 10
-    num_epochs = 75
+    num_epochs = 15
     learning_rate = 0.0001
     batch_size = 32
     # for decoding
@@ -44,7 +44,7 @@ class Parameters():
     # data
     datasets = ['GOT', 'PTB']
     embed_size = 300  # std=353, inputless_dec=499
-    label_embed_size = 8
+    label_embed_size = 16
     sent_max_size = 1000
     input_ = datasets[1]
     debug = False
