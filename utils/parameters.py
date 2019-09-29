@@ -19,7 +19,7 @@ class Parameters():
     num_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 10
-    num_epochs = 15
+    num_epochs = 10
     learning_rate = 0.0001
     batch_size = 32
     # for decoding

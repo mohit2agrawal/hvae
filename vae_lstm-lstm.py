@@ -364,6 +364,10 @@ def main(params):
 
             all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
 
+            smi, gmi, tmi = [],[],[]
+            # smi_ext, gmi_ext, tmi_ext = [],[],[]
+            # smi_ind, gmi_ind, tmi_ind = [],[],[]
+
             word_data = np.array(word_data)
             label_data = np.array(label_data)
             word_labels_arr = np.array(word_labels_arr)
@@ -436,6 +440,66 @@ def main(params):
                             [total_lower_bound, optimize_encoder],
                             feed_dict=feed)
 
+
+                        # ## for MI
+                        # sent_mi = 0
+                        # global_mi = 0
+                        # num_examples = 0
+
+                        # ## weighted average on calc_mi_q
+                        # val_len = len(encoder_val_data)
+                        # for val_it in range(val_len // params.batch_size):
+                        #     s_idx = val_it * params.batch_size
+                        #     e_idx = (val_it + 1) * params.batch_size
+                        #     word_input = encoder_val_data[s_idx:e_idx]
+                        #     word_input = zero_pad(word_input, pad)
+                        #     label_input = val_labels_arr[s_idx:e_idx]
+                        #     label_input = zero_pad(label_input, pad)
+
+                        #     ## batch_size = word_input.shape[0]
+                        #     batch_size = len(word_input)
+                        #     num_examples += batch_size
+
+                        #     feed = {
+                        #         word_inputs: word_input,
+                        #         label_inputs: label_input,
+                        #     }
+                        #     zs_dist, zs_sample, zg_dist, zg_sample, _, _ = sess.run(
+                        #         [
+                        #             Zsent_distribution, zsent_sample,
+                        #             Zglobal_distribition, zglobal_sample,
+                        #             zsent_state, zglobal_state
+                        #         ],
+                        #         feed_dict=feed)
+
+                        #     mi_s = sess.run(mutual_info,
+                        #                     feed_dict={
+                        #                         mi_mu: zs_dist[0],
+                        #                         mi_logvar: zs_dist[1],
+                        #                         mi_samples: zs_sample
+                        #                     })
+                        #     sent_mi += mi_s * batch_size
+
+                        #     mi_g = sess.run(mutual_info,
+                        #                     feed_dict={
+                        #                         mi_mu: zg_dist[0],
+                        #                         mi_logvar: zg_dist[1],
+                        #                         mi_samples: zg_sample
+                        #                     })
+                        #     global_mi += mi_g * batch_size
+
+                        # sent_mi /= num_examples
+                        # global_mi /= num_examples
+                        # cur_mi = sent_mi + global_mi
+
+                        # smi_ext.append(sent_mi)
+                        # gmi_ext.append(global_mi)
+                        # tmi_ext.append(cur_mi)
+                        # smi_ind.append(1)
+                        # gmi_ind.append(1)
+                        # tmi_ind.append(1)
+                        # write_lists_to_file('mi_ext_values.txt', smi_ext, gmi_ext, tmi_ext, smi_ind, gmi_ind, tmi_ind)
+
                         if sub_iter % 15 == 0:
                             ## TODO why -1?
                             burn_num_words += (burn_sents_len -
@@ -502,18 +566,7 @@ def main(params):
                                         all_beta, all_tlb, all_kl,
                                         all_klzg, all_klzs)
 
-                    cur_it += 1
-                    if cur_it % 100 == 0 and cur_it != 0:
-                        path_to_save = os.path.join(params.MODEL_DIR,
-                                                    "vae_lstm_model")
-                        # print(path_to_save)
-                        model_path_name = saver.save(sess,
-                                                     path_to_save,
-                                                     global_step=cur_it)
-                        # print(model_path_name)
-
-                ## Calculate MI (at end of epoch)
-                if aggressive:
+                    ## for MI
                     sent_mi = 0
                     global_mi = 0
                     num_examples = 0
@@ -564,12 +617,37 @@ def main(params):
                     global_mi /= num_examples
                     cur_mi = sent_mi + global_mi
 
-                    print("pre mi:%.4f. cur mi:%.4f" %
-                            (pre_mi, cur_mi))
-                    if cur_mi < pre_mi:
-                        aggressive = False
-                        print("STOP BURNING")
-                    pre_mi = cur_mi
+                    smi.append(sent_mi)
+                    gmi.append(global_mi)
+                    tmi.append(cur_mi)
+                    # smi_ext.append(sent_mi)
+                    # gmi_ext.append(global_mi)
+                    # tmi_ext.append(cur_mi)
+                    # smi_ind.append(0)
+                    # gmi_ind.append(0)
+                    # tmi_ind.append(0)
+                    write_lists_to_file('mi_values.txt', smi, gmi, tmi)
+                    # write_lists_to_file('mi_ext_values.txt', smi_ext, gmi_ext, tmi_ext, smi_ind, gmi_ind, tmi_ind)
+
+                    cur_it += 1
+                    if aggressive and cur_it%num_iters==0:
+                        print("pre mi:%.4f. cur mi:%.4f" %
+                                (pre_mi, cur_mi))
+                        if cur_mi < pre_mi:
+                            aggressive = False
+                            print("STOP BURNING")
+                        pre_mi = cur_mi
+
+
+                    if cur_it % 100 == 0 and cur_it != 0:
+                        path_to_save = os.path.join(params.MODEL_DIR,
+                                                    "vae_lstm_model")
+                        # print(path_to_save)
+                        model_path_name = saver.save(sess,
+                                                     path_to_save,
+                                                     global_step=cur_it)
+                        # print(model_path_name)
+
 
 
 if __name__ == "__main__":
