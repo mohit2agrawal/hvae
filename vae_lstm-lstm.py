@@ -116,19 +116,14 @@ def main(params):
     # data_folder = './DATA/parallel_data_10k/'
     data_folder = {
         'ptb': './DATA/ptb/',
-        'ptb_ner': './DATA/ptb_ner'
+        'ptb_ner': './DATA/ptb_ner',
+        'ptb_pos': './DATA/ptb_pos'
     }.get(params.name)
     # data in form [data, labels]
-    train_data_raw, train_label_raw, val_data_raw, val_label_raw = data_.ptb_read(
-        data_folder)
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, encoder_val_data = data_.prepare_data(
-        train_data_raw, train_label_raw, val_data_raw, val_label_raw, params,
-        data_folder)
-
-    train_label_raw, val_label_raw, test_label_raw = label_data_.ptb_read(
-        data_folder)
-    label_data, label_labels_arr, label_embed_arr, label_data_dict, val_labels_arr = label_data_.prepare_data(
-        train_label_raw, val_label_raw, params)
+    train_data_raw, train_label_raw, val_data_raw, val_label_raw  = data_.ptb_read(data_folder)
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, encoder_val_data, val_labels_arr = data_.prepare_data(
+        train_data_raw, train_label_raw, val_data_raw, val_label_raw, params, data_folder
+    )
 
     max_sent_len = max(max(map(len, word_data)),
                        max(map(len, encoder_word_data)))
@@ -189,9 +184,9 @@ def main(params):
                 # )
 
         # inputs = tf.unstack(inputs, num=num_steps, axis=1)
-        sizes = word_data_dict.sizes
-        word_vocab_size = max(sizes[1], sizes[2], sizes[0])
-        label_vocab_size = label_data_dict.vocab_size
+        sizes = data_dict.sizes
+        word_vocab_size = max(sizes)
+        label_vocab_size = data_dict.label_vocab_size
         # seq_length = tf.placeholder_with_default([0.0], shape=[None])
         d_seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
         # qz = q_net(word_inputs, seq_length, params.batch_size)

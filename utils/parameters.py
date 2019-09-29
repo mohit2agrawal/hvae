@@ -15,7 +15,7 @@ class Parameters():
     anneal_value = 1
     debug = True
     # name = "rVACS_kl"
-    name = "ptb_ner"
+    name = "ptb_pos"
     num_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 10
