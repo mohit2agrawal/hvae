@@ -57,27 +57,14 @@ def write_lists_to_file(filename, *lists):
 
 def main(params):
     # data_folder = './DATA/parallel_data_10k/'
-    data_folder = {
-        'ptb': './DATA/ptb/',
-        'ptb_ner': './DATA/ptb_ner',
-        'ptb_pos': './DATA/ptb_pos'
-    }.get(params.name)
+    data_folder = './DATA/' + params.name
     # data in form [data, labels]
     train_data_raw, train_label_raw = data_.ptb_read(data_folder)
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, label_data, label_labels_arr, label_embed_arr = data_.prepare_data(
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, label_data, label_labels_arr, label_embed_arr, decoder_words, decoder_labels = data_.prepare_data(
         train_data_raw, train_label_raw, params, data_folder
     )
 
-    # train_label_raw, valid_label_raw, test_label_raw = label_data_.ptb_read(
-    #     data_folder
-    # )
-    # label_data, label_labels_arr, label_embed_arr, label_data_dict = label_data_.prepare_data(
-    #     train_label_raw, params
-    # )
-
-    max_sent_len = max(
-        max(map(len, word_data)), max(map(len, encoder_word_data))
-    )
+    max_sent_len = max(map(len, word_data))
 
     with tf.Graph().as_default() as graph:
 
@@ -93,6 +80,13 @@ def main(params):
         )
         d_label_labels = tf.placeholder(
             shape=[None, None], dtype=tf.int32, name="d_label_labels"
+        )
+
+        d_word_inputs = tf.placeholder(
+            dtype=tf.int32, shape=[None, None], name="d_word_inputs"
+        )
+        d_label_inputs = tf.placeholder(
+            dtype=tf.int32, shape=[None, None], name="d_label_inputs"
         )
 
         with tf.device("/cpu:0"):
@@ -138,8 +132,9 @@ def main(params):
             vect_inputs, label_inputs_1, params.batch_size, max_sent_len
         )
         word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _, dec_word_states, dec_label_states = decoder(
-            zglobal_sample, params.batch_size, word_vocab_size,
-            label_vocab_size, max_sent_len
+            d_word_inputs, d_label_inputs, zglobal_sample, params.batch_size,
+            word_vocab_size, label_vocab_size, max_sent_len, word_embedding,
+            label_embedding
         )
 
         neg_kld_zsent = -1 * tf.reduce_mean(
@@ -293,6 +288,8 @@ def main(params):
             word_labels_arr = np.array(word_labels_arr)
             encoder_word_data = np.array(encoder_word_data)
             label_labels_arr = np.array(label_labels_arr)
+            decoder_words = np.array(decoder_words)
+            decoder_labels = np.array(decoder_labels)
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
                 print("Epoch: {} started at: {}".format(e, epoch_start_time))
@@ -307,7 +304,7 @@ def main(params):
                     cur_it += 1
                     alpha_v, beta_v = schedule(cur_it)
                     # beta_v, alpha_v = schedule(cur_it)
-                    beta_v = 1
+                    # beta_v = 1
 
                     params.is_training = True
                     start_idx = it * params.batch_size
@@ -322,6 +319,8 @@ def main(params):
                     sent_dec_l_batch = word_labels_arr[indices]
                     sent_l_batch = encoder_word_data[indices]
                     label_l_batch = label_labels_arr[indices]
+                    dec_word_inp_batch = decoder_words[indices]
+                    dec_label_inp_batch = decoder_labels[indices]
                     #print(type(label_l_batch))
                     #print(label_l_batch)
                     #print(pad)
@@ -338,6 +337,8 @@ def main(params):
                     sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
                     sent_l_batch = zero_pad(sent_l_batch, pad)
                     label_l_batch = zero_pad(label_l_batch, pad)
+                    dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                    dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
 
                     #print('-' * 20)
                     #print(type(label_l_batch))
@@ -349,6 +350,8 @@ def main(params):
                         d_word_labels: sent_dec_l_batch,
                         d_label_labels: label_l_batch,
                         d_seq_length: length_,
+                        d_word_inputs: dec_word_inp_batch,
+                        d_label_inputs: dec_label_inp_batch,
                         alpha: alpha_v,
                         beta: beta_v
                     }

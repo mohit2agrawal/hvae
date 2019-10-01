@@ -412,9 +412,12 @@ def prepare_data(data_raw, labels_raw, params, data_path):
         [data_dict.word2idx[word] for word in sent[:-1]]
         for sent in data_dict.sentences if len(sent) < params.sent_max_size - 2
     ]
-
     encoder_data = [
         [data_dict.word2idx[word] for word in sent[1:]]
+        for sent in data_dict.sentences if len(sent) < params.sent_max_size - 2
+    ]
+    decoder_data = [
+        [data_dict.word2idx[word] for word in sent[:-1]]
         for sent in data_dict.sentences if len(sent) < params.sent_max_size - 2
     ]
 
@@ -453,6 +456,10 @@ def prepare_data(data_raw, labels_raw, params, data_path):
         [data_dict.l_word2idx[word] for word in sent[1:]]
         for sent in data_dict.labels if len(sent) < params.sent_max_size - 2
     ]
+    decoder_labels = [
+        [data_dict.l_word2idx[word] for word in sent[:-1]]
+        for sent in data_dict.labels if len(sent) < params.sent_max_size - 2
+    ]
 
     filename = os.path.join(model_path, "data_dict.pkl")
     with open(filename, 'w') as wf:
@@ -465,4 +472,4 @@ def prepare_data(data_raw, labels_raw, params, data_path):
             len(data_raw), data_dict.vocab_size, len(data)
         )
     )
-    return data, encoder_data, encoder_data_adjusted_idx, embed_arr, data_dict, labels, encoder_labels, label_embed_arr
+    return data, encoder_data, encoder_data_adjusted_idx, embed_arr, data_dict, labels, encoder_labels, label_embed_arr, decoder_data, decoder_labels

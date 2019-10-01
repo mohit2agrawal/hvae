@@ -58,45 +58,63 @@ def softmax(x):
 
 def main(params):
     # data_folder = './DATA/parallel_data_10k/'
-    data_folder = {
-        'ptb': './DATA/ptb/',
-        'ptb_ner': './DATA/ptb_ner'
-    }.get(params.name)
+    data_folder = './DATA/' + params.name
     # data in form [data, labels]
     train_data_raw, train_label_raw = data_.ptb_read(data_folder)
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict = data_.prepare_data(
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, decoder_words, decoder_labels = data_.prepare_data(
         train_data_raw, train_label_raw, params, data_folder
     )
 
-    train_label_raw, valid_label_raw, test_label_raw = label_data_.ptb_read(
-        data_folder
+    max_sent_len = max(map(len, word_data))
+
+    d_word_inputs = tf.placeholder(
+        dtype=tf.int32, shape=[None, None], name="d_word_inputs"
     )
-    label_data, label_labels_arr, label_embed_arr, label_data_dict = label_data_.prepare_data(
-        train_label_raw, params
+    d_label_inputs = tf.placeholder(
+        dtype=tf.int32, shape=[None, None], name="d_label_inputs"
     )
 
-    max_sent_len = max(
-        max(map(len, word_data)), max(map(len, encoder_word_data))
-    )
+    class_vocab_sizes = [1] * data_dict.sizes[0] + data_dict.sizes[1:]
 
     with tf.Graph().as_default() as graph:
-        word_vocab_size = max(word_data_dict.sizes)
-        label_vocab_size = label_data_dict.vocab_size
+        word_vocab_size = max(data_dict.sizes)
+        label_vocab_size = data_dict.label_vocab_size
 
         zglobal_sample = tf.placeholder(
             dtype=tf.float64, shape=[None, params.latent_size]
         )
+        word_embedding = tf.Variable(
+            word_embed_arr,
+            trainable=params.fine_tune_embed,
+            name="word_embedding",
+            dtype=tf.float64
+        )  # creates a variable that can be used as a tensor
+        label_embedding = tf.Variable(
+            label_embed_arr,
+            trainable=params.fine_tune_embed,
+            name="label_embedding",
+            dtype=tf.float64
+        )
 
-        word_logits, label_logits, _, _, _, _, _, _, _ = decoder(
+        _, _, _, _, _, _, _, _, _, pred_label_indices, pred_word_indices = decoder(
+            d_word_inputs,
+            d_label_inputs,
             zglobal_sample,
             1,  # batch_size
             word_vocab_size,
             label_vocab_size,
             max_sent_len,
+            word_embedding,
+            label_embedding,
+            class_vocab_sizes=class_vocab_sizes,
+            label_bos_idx=data_dict.l_word2idx[data_dict.bos],
+            word_bos_idx=data_dict.word2idx[data_dict.bos],
+            gen_mode=True,
         )
 
         saver = tf.train.Saver()
-        with tf.Session() as sess:
+        config = tf.ConfigProto(device_count={'GPU': 0})
+        with tf.Session(config=config) as sess:
             sess.run(
                 [
                     tf.global_variables_initializer(),
@@ -118,7 +136,6 @@ def main(params):
 
             batch_size = 1
             number_of_samples = params.num_samples
-            same_context_sentences = 1
             out_sentence_file = "./generated_sentences.txt"
             out_labels_file = "./generated_labels.txt"
 
@@ -129,77 +146,13 @@ def main(params):
                     params.is_training = False
 
                     z = np.random.normal(0, 1, (1, params.latent_size))
-                    w_logits, l_logits = sess.run(
-                        [word_logits, label_logits],
+                    l_indices, w_indices = sess.run(
+                        [pred_label_indices, pred_word_indices],
                         feed_dict={zglobal_sample: z}
                     )
-                    w_logits = w_logits.reshape((max_sent_len, word_vocab_size))
-                    l_logits = l_logits.reshape(
-                        (max_sent_len, label_vocab_size)
-                    )
 
-                    # w_softmax = softmax(w_logits)
-                    l_softmax = softmax(l_logits)
-
-                    labels_idx = [
-                        np.random.choice(label_vocab_size, size=1, p=smax)[0]
-                        for smax in l_softmax
-                    ]
-                    labels = [label_data_dict.idx2word[i] for i in labels_idx]
-
-                    sizes = word_data_dict.sizes
-                    b1 = sizes[0]
-                    b2 = sizes[0] + sizes[1]
-                    b3 = sizes[0] + sizes[1] + sizes[2]
-                    b4 = sizes[0] + sizes[1] + sizes[2] + sizes[3]
-                    b5 = sizes[0] + sizes[1] + sizes[2] + sizes[3] + sizes[4]
-
-                    # words_idx = []
-                    words = []
-                    for i, label in enumerate(labels):
-                        if label == '0':  # other(O)
-                            word_idx = np.random.choice(
-                                range(b1, b2),
-                                size=1,
-                                p=softmax(w_logits[i][:b2 - b1])
-                            )[0]
-                        elif label == '1':  # LOCATION
-                            word_idx = np.random.choice(
-                                range(b2, b3),
-                                size=1,
-                                p=softmax(w_logits[i][:b3 - b2])
-                            )[0]
-                        elif label == '2':  # PERSON
-                            word_idx = np.random.choice(
-                                range(b3, b4),
-                                size=1,
-                                p=softmax(w_logits[i][:b4 - b3])
-                            )[0]
-                        elif label == '3':  # ORGANIZATION
-                            word_idx = np.random.choice(
-                                range(b4, b5),
-                                size=1,
-                                p=softmax(w_logits[i][:b5 - b4])
-                            )[0]
-                        elif label == '4':
-                            words.append('<BOS>')
-                            continue
-                        elif label == '5':
-                            words.append('<EOS>')
-                            continue
-                        elif label == '6':
-                            words.append('<UNK>')
-                            continue
-                        elif label == '7':
-                            words.append('<PAD>')
-                            continue
-                        else:
-                            print('got unwanted label:', label)
-                            words.append('UNK')
-                            continue
-
-                        # words_idx.append(word_idx)
-                        words.append(word_data_dict.idx2word[word_idx])
+                    labels = [data_dict.l_idx2word[i] for i in l_indices]
+                    words = [data_dict.idx2word[i] for i in l_indices]
 
                     sent_f.write(' '.join(words))
                     sent_f.write('\n')
