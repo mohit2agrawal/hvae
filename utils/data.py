@@ -40,11 +40,24 @@ def ptb_read(data_path):
         sent_file="./trained_embeddings_" + params.name + "/labels.pickle"
     )
 
-    return sentences_data, label_data
+    val_data = ptb_data_read(
+        os.path.join(data_path, 'val_data.txt'),
+        sent_file="./trained_embeddings_" + params.name +
+        "/val_sentences.pickle"
+    )
+
+    val_label_data = ptb_data_read(
+        os.path.join(data_path, 'val_labels.txt'),
+        sent_file="./trained_embeddings_" + params.name + "/val_labels.pickle"
+    )
+
+    return sentences_data, label_data, val_data, val_label_data
 
 
 class Dictionary(object):
-    def __init__(self, sentences, labels, vocab_drop):
+    def __init__(
+        self, sentences, labels, val_sentences, val_labels, vocab_drop
+    ):
         # sentences - array of sentences
         self._vocab_drop = vocab_drop
         if vocab_drop < 0:
@@ -56,8 +69,11 @@ class Dictionary(object):
         ## keep pad as the first element, word2idx['PAD'] := 0
         self.specials = [self.pad, self.bos, self.eos, self.unk]
         self.specials_ = self.specials + [x.lower() for x in self.specials]
+
         self._sentences = sentences
+        self._val_sentences = val_sentences
         self._labels = labels
+        self._val_labels = val_labels
 
         # self.get_words()
         ## word frequency stored per label
@@ -66,6 +82,10 @@ class Dictionary(object):
             for j, word in enumerate(sent):
                 if word not in self.specials_:
                     counts[self._labels[i][j]][word.lower()] += 1
+        for i, sent in enumerate(val_sentences):
+            for j, word in enumerate(sent):
+                if word not in self.specials_:
+                    counts[self._val_labels[i][j]][word.lower()] += 1
 
         self._labels_set = sorted(counts.keys())
         ## drop words less frequent than vocab drop
@@ -109,7 +129,8 @@ class Dictionary(object):
         # self._words.append('<unk>')
         ## modify sentences to mark the dropped words as UNK
         ## also modify the labels
-        self._mod_sentences()
+        self._mod_sentences(self._sentences, self._labels)
+        self._mod_sentences(self._val_sentences, self._val_labels)
 
     @property
     def vocab_size(self):
@@ -140,6 +161,14 @@ class Dictionary(object):
         return self._labels
 
     @property
+    def val_sentences(self):
+        return self._val_sentences
+
+    @property
+    def val_labels(self):
+        return self._val_labels
+
+    @property
     def word2idx(self):
         return self._word2idx
 
@@ -158,38 +187,39 @@ class Dictionary(object):
     def seq2dx(self, sentence):
         return [self.word2idx[wd] for wd in sentence]
 
-    def get_words(self):
-        for i in range(len(self.sentences)):
-            sent = self.sentences[i]
+    def get_words(self, sentences, labels):
+        for i in range(len(sentences)):
+            sent = sentences[i]
             for j in range(len(sent)):
                 word = sent[j]
                 if word in ["<EOS>", "<BOS>", "<PAD>", "<UNK>"]:
                     self._words.append(word)
-                elif (self._labels[i][j] == '0'):
+                elif (labels[i][j] == '0'):
                     self._other_words.append(word.lower())
-                elif (self._labels[i][j] == '1'):
+                elif (labels[i][j] == '1'):
                     self._location_words.append(word.lower())
-                elif (self._labels[i][j] == '2'):
+                elif (labels[i][j] == '2'):
                     self._person_words.append(word.lower())
-                elif (self._labels[i][j] == '3'):
+                elif (labels[i][j] == '3'):
                     self._org_words.append(word.lower())
 
-    def _mod_sentences(self):
+    def _mod_sentences(self, sentences, labels):
         all_labels = self.specials + self._labels_set
         # for every sentence, if word not in vocab set to <UNK>
-        for i, sent in enumerate(self._sentences):
+        for i, sent in enumerate(sentences):
             for j in range(len(sent)):
                 if sent[j] in self.specials_ + ['N', 'n']:
                     sent[j] = sent[j].upper()
                 else:
                     sent[j] = sent[j].lower()
                 sent_invalid = sent[j] not in self.word2idx
-                label_invalid = self._labels[i][j] not in all_labels
+                label_invalid = labels[i][j] not in all_labels
                 if sent_invalid or label_invalid:
                     sent[j] = self.unk
-                    self._labels[i][j] = self.unk
+                    labels[i][j] = self.unk
             # self._sentences[i] = sent
             # self._labels[i] = lab
+        return
 
     def build_vocabulary(self):
         counter_words = collections.Counter(self._words)
@@ -319,7 +349,7 @@ def train_w2vec(
         min_count=0,
         window=5,
         iter=w2vec_it
-    )  # CBOW MODEL IS USED AND Embed_size default
+    )  #CBOW MODEL IS USED AND Embed_size default
     w2vec.build_vocab(sentences=sentences)
     print("Training w2vec")
     w2vec.train(
@@ -348,10 +378,14 @@ def save_data(sentences, pkl_file, text_file):
             wf.write("\n")
 
 
-def prepare_data(data_raw, labels_raw, params, data_path):
+def prepare_data(
+    data_raw, labels_raw, val_data_raw, val_labels_raw, params, data_path
+):
     # get embeddings, prepare data
     print("building dictionary")
-    data_dict = Dictionary(data_raw, labels_raw, params.vocab_drop)
+    data_dict = Dictionary(
+        data_raw, labels_raw, val_data_raw, val_labels_raw, params.vocab_drop
+    )
     save_data(
         data_dict.sentences,
         "./trained_embeddings_" + params.name + "/sentences_mod.pickle",
@@ -362,6 +396,16 @@ def prepare_data(data_raw, labels_raw, params, data_path):
         "./trained_embeddings_" + params.name + "/labels_mod.pickle",
         os.path.join(data_path, 'labels_mod.txt')
     )
+    save_data(
+        data_dict.val_sentences,
+        "./trained_embeddings_" + params.name + "/val_sentences_mod.pickle",
+        os.path.join(data_path, 'val_data_mod.txt')
+    )
+    save_data(
+        data_dict.val_labels,
+        "./trained_embeddings_" + params.name + "/val_labels_mod.pickle",
+        os.path.join(data_path, 'val_labels_mod.txt')
+    )
 
     model_path = "./trained_embeddings_" + params.name
     filename = os.path.join(model_path, "embedding_file.pkl")
@@ -371,9 +415,8 @@ def prepare_data(data_raw, labels_raw, params, data_path):
             embed_arr = pickle.load(rf)
 
     else:
-        vector_file = 'wiki.en.align.vec'
-        en_align_dictionary = FastVector(vector_file=vector_file)
-        print("loaded:", vector_file)
+        en_align_dictionary = FastVector(vector_file='wiki.en.align.vec')
+        print("loaded the files..")
 
         embed_arr = np.zeros([data_dict.vocab_size, params.embed_size])
         for i in range(1, embed_arr.shape[0]):
@@ -418,6 +461,12 @@ def prepare_data(data_raw, labels_raw, params, data_path):
         for sent in data_dict.sentences if len(sent) < params.sent_max_size - 2
     ]
 
+    encoder_val_data = [
+        [data_dict.word2idx[word] for word in sent[1:]]
+        for sent in data_dict.val_sentences
+        if len(sent) < params.sent_max_size - 2
+    ]
+
     sizes = data_dict.sizes
     to_subtract = [0]
     i = 0
@@ -438,12 +487,18 @@ def prepare_data(data_raw, labels_raw, params, data_path):
             a.append(index - s)
         encoder_data_adjusted_idx.append(a)
 
-    ## label encodings
-    # label_embed_arr = np.zeros(
-    #     [len(data_dict.l_word2idx.keys()), params.label_embed_size]
-    # )
-    # for i in range(len(data_dict.l_word2idx.keys())):
-    #     label_embed_arr[i][i] = 1
+    val_encoder_data_adjusted_idx = []
+    for i, sent in enumerate(data_dict.val_sentences):
+        a = []
+        for word in sent[1:]:
+            index = data_dict.word2idx[word]
+            for s in to_subtract:
+                if s <= index:
+                    break
+            a.append(index - s)
+        val_encoder_data_adjusted_idx.append(a)
+
+
     label_embed_arr = np.eye(len(data_dict.l_word2idx.keys()))
     labels = [
         [data_dict.l_word2idx[word] for word in sent[:-1]]
@@ -452,6 +507,11 @@ def prepare_data(data_raw, labels_raw, params, data_path):
     encoder_labels = [
         [data_dict.l_word2idx[word] for word in sent[1:]]
         for sent in data_dict.labels if len(sent) < params.sent_max_size - 2
+    ]
+
+    val_labels = [
+        [data_dict.l_word2idx[word] for word in sent[1:]]
+        for sent in data_dict.val_labels if len(sent) < params.sent_max_size - 2
     ]
 
     filename = os.path.join(model_path, "data_dict.pkl")
@@ -465,4 +525,4 @@ def prepare_data(data_raw, labels_raw, params, data_path):
             len(data_raw), data_dict.vocab_size, len(data)
         )
     )
-    return data, encoder_data, encoder_data_adjusted_idx, embed_arr, data_dict, labels, encoder_labels, label_embed_arr
+    return data, encoder_data, encoder_data_adjusted_idx, embed_arr, data_dict, labels, encoder_labels, label_embed_arr, encoder_val_data, val_encoder_data_adjusted_idx, val_labels

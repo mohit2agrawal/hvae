@@ -54,29 +54,74 @@ def write_lists_to_file(filename, *lists):
                 f.write(' ')
             f.write('\n')
 
+def log_sum_exp(value, axis=None, keepdims=False):
+    """Numerically stable implementation of the (torch) operation
+    value.exp().sum(axis, keepdims).log()
+    """
+    if axis is not None:
+        m = tf.reduce_max(value, axis=axis, keepdims=True)
+        value0 = value - m
+        if keepdims is False:
+            m = tf.squeeze(m, axis)
+        return m + tf.log(
+            tf.reduce_sum(tf.exp(value0), axis=axis, keepdims=keepdims))
+    else:
+        m = tf.reduce_max(value)
+        sum_exp = tf.reduce_sum(tf.exp(value - m))
+        return m + tf.log(sum_exp)
+
+def calc_mi_q(mu, logvar, z_samples):
+    # mu, logvar = Zsent_distribution
+    mu_shape = tf.shape(mu)
+    x_batch, nz = mu_shape[0], mu_shape[1]
+
+    # [z_batch, 1, nz]
+    z_samples = tf.expand_dims(z_samples, 1)
+
+    # E_{q(z|x)}log(q(z|x)) = -0.5*nz*log(2*\pi) - 0.5*(1+logvar).sum(-1)
+    neg_entropy = tf.reduce_mean(
+        -0.5 *
+        tf.cast(tf.multiply(tf.cast(nz, dtype=tf.float64),
+                            tf.cast(tf.log(2 * np.pi), dtype=tf.float64)),
+                dtype=tf.float64) -
+        0.5 * tf.cast(tf.reduce_sum(1 + logvar, -1), dtype=tf.float64))
+
+    # [1, x_batch, nz]
+    mu, logvar = tf.expand_dims(mu, 0), tf.expand_dims(logvar, 0)
+    var = tf.exp(logvar)
+
+    # (z_batch, x_batch, nz)
+    dev = z_samples - mu
+
+    # (z_batch, x_batch)
+    log_density = -0.5 * tf.reduce_sum(tf.square(dev) / var, -1) - 0.5 * (
+        tf.multiply(tf.cast(nz, dtype=tf.float64),
+                    tf.cast(tf.log(2 * np.pi), dtype=tf.float64))) + tf.cast(
+                        tf.reduce_sum(logvar, -1), dtype=tf.float64)
+
+    # log q(z): aggregate posterior
+    # [z_batch]
+    log_qz = tf.cast(log_sum_exp(log_density, axis=1),
+                     dtype=tf.float64) - tf.log(
+                         tf.cast(x_batch, dtype=tf.float64))
+
+    return tf.squeeze(neg_entropy - tf.reduce_mean(log_qz, -1))
+
 
 def main(params):
     # data_folder = './DATA/parallel_data_10k/'
-    data_folder = {
-        'ptb': './DATA/ptb/',
-        'ptb_ner': './DATA/ptb_ner',
-        'ptb_pos': './DATA/ptb_pos'
-    }.get(params.name)
+    data_folder = './DATA/' + params.name
     # data in form [data, labels]
-    train_data_raw, train_label_raw = data_.ptb_read(data_folder)
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, label_data, label_labels_arr, label_embed_arr = data_.prepare_data(
-        train_data_raw, train_label_raw, params, data_folder
+    train_data_raw, train_label_raw, val_data_raw, val_label_raw = data_.ptb_read(
+        data_folder
+    )
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, encoder_val_data, encoder_val_data_shifted, val_labels_arr = data_.prepare_data(
+        train_data_raw, train_label_raw, val_data_raw, val_label_raw, params,
+        data_folder
     )
 
-    # train_label_raw, valid_label_raw, test_label_raw = label_data_.ptb_read(
-    #     data_folder
-    # )
-    # label_data, label_labels_arr, label_embed_arr, label_data_dict = label_data_.prepare_data(
-    #     train_label_raw, params
-    # )
-
     max_sent_len = max(
-        max(map(len, word_data)), max(map(len, encoder_word_data))
+        max(map(len, word_data)), max(map(len, encoder_val_data))
     )
 
     with tf.Graph().as_default() as graph:
@@ -128,8 +173,8 @@ def main(params):
                 )
 
         # inputs = tf.unstack(inputs, num=num_steps, axis=1)
-        word_vocab_size = max(word_data_dict.sizes)
-        label_vocab_size = word_data_dict.label_vocab_size
+        word_vocab_size = max(data_dict.sizes)
+        label_vocab_size = data_dict.label_vocab_size
         # seq_length = tf.placeholder_with_default([0.0], shape=[None])
         d_seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
         # qz = q_net(word_inputs, seq_length, params.batch_size)
@@ -176,7 +221,7 @@ def main(params):
             l_masked_losses, reduction_indices=1
         ) / d_seq_length
         label_rec_loss = tf.reduce_mean(l_mean_loss_by_example)
-        # label_perplexity = tf.exp(label_rec_loss)
+        label_perplexity = tf.exp(label_rec_loss)
 
         # Word reconstruction loss
         # print(word_logits.shape)
@@ -193,7 +238,7 @@ def main(params):
             w_masked_losses, reduction_indices=1
         ) / d_seq_length
         word_rec_loss = tf.reduce_mean(w_mean_loss_by_example)
-        # word_perplexity = tf.exp(word_rec_loss)
+        word_perplexity = tf.exp(word_rec_loss)
 
         rec_loss = word_rec_loss + label_rec_loss
 
@@ -221,6 +266,20 @@ def main(params):
         optimize = opt.apply_gradients(
             zip(clipped_grad, tf.trainable_variables())
         )
+
+        #mi_mu = tf.placeholder(shape=[params.batch_size, params.latent_size],
+        #                       dtype=tf.float64,
+        #                       name="mi_mu")
+        #mi_logvar = tf.placeholder(
+        #    shape=[params.batch_size, params.latent_size],
+        #    dtype=tf.float64,
+        #    name="mi_logvar")
+        #mi_samples = tf.placeholder(
+        #    shape=[params.batch_size, params.latent_size],
+        #    dtype=tf.float64,
+        #    name="mi_samples")
+        #mutual_info = calc_mi_q(mi_mu, mi_logvar, mi_samples)
+
 
         saver = tf.train.Saver(max_to_keep=10)
         config = tf.ConfigProto(device_count={'GPU': 0})
@@ -283,6 +342,9 @@ def main(params):
 
             all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
             all_rl, all_wrl, all_lrl = [], [], []
+            all_w_ppl, all_l_ppl = [], []
+            smi, gmi = [], []
+            all_zc_mu, all_zc_sigma = [],[]
 
             schedule = scheduler(
                 params.fn, params.num_epochs * num_iters, params.cycles,
@@ -293,6 +355,9 @@ def main(params):
             word_labels_arr = np.array(word_labels_arr)
             encoder_word_data = np.array(encoder_word_data)
             label_labels_arr = np.array(label_labels_arr)
+            encoder_val_data = np.array(encoder_val_data)
+            encoder_val_data_shifted = np.array(encoder_val_data_shifted)
+            val_labels_arr = np.array(val_labels_arr)
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
                 print("Epoch: {} started at: {}".format(e, epoch_start_time))
@@ -307,7 +372,7 @@ def main(params):
                     cur_it += 1
                     alpha_v, beta_v = schedule(cur_it)
                     # beta_v, alpha_v = schedule(cur_it)
-                    beta_v = 1
+                    # beta_v = 1
 
                     params.is_training = True
                     start_idx = it * params.batch_size
@@ -364,6 +429,9 @@ def main(params):
                         feed_dict=feed
                     )
 
+                    all_zc_mu.append(z1a)
+                    all_zc_sigma.append(z1b)
+
                     all_alpha.append(alpha_v)
                     all_beta.append(beta_v)
                     all_tlb.append(tlb)
@@ -373,10 +441,115 @@ def main(params):
                     all_rl.append(rl)
                     all_lrl.append(lrl)
                     all_wrl.append(wrl)
+
+
+                    ## Perplexity
+                    # w_ppl, l_ppl = 0,0
+                    # batch_size = params.batch_size
+                    # num_examples=0
+                    # for p_it in range(len(encoder_val_data)//batch_size):
+                    #     s_idx = p_it * batch_size
+                    #     e_idx = (p_it + 1) * batch_size
+                    #     word_input = encoder_val_data[s_idx:e_idx]
+                    #     word_input = zero_pad(word_input, pad)
+                    #     shifted_word_input = encoder_val_data_shifted[s_idx:e_idx]
+                    #     shifted_word_input = zero_pad(shifted_word_input, pad)
+                    #     label_input = val_labels_arr[s_idx:e_idx]
+                    #     label_input = zero_pad(label_input, pad)
+                    #     num_examples += batch_size
+
+                    #     wp, lp = sess.run(
+                    #         [total_lower_bound,kl_term_weight],
+                    #         feed_dict={
+                    #             word_inputs: word_input,
+                    #             label_inputs: label_input,
+                    #             d_word_labels: shifted_word_input,
+                    #             d_label_labels: label_input,
+                    #             d_seq_length: length_,
+                    #             alpha: alpha_v,
+                    #             beta: beta_v
+                    #         }
+                    #     )
+
+                    #     w_ppl += wp*batch_size
+                    #     l_ppl += lp*batch_size
+
+                    # w_ppl /= num_examples
+                    # l_ppl /= num_examples
+
+                    # all_w_ppl.append(w_ppl)
+                    # all_l_ppl.append(l_ppl)
+
+                    ## Mutual Information
+                    # sent_mi = 0
+                    # global_mi = 0
+                    # num_examples = 0
+                    # batch_size = params.batch_size
+
+                    # ## weighted average on calc_mi_q
+                    # for mi_it in range(num_iters):
+                    #     s_idx = mi_it * batch_size
+                    #     e_idx = (mi_it + 1) * batch_size
+                    #     word_input = encoder_word_data[s_idx:e_idx]
+                    #     word_input = zero_pad(word_input, pad)
+                    #     label_input = label_labels_arr[s_idx:e_idx]
+                    #     label_input = zero_pad(label_input, pad)
+
+                    #     ## batch_size = word_input.shape[0]
+                    #     ## batch_size = len(word_input)
+                    #     num_examples += batch_size
+
+                    #     feed = {
+                    #         word_inputs: word_input,
+                    #         label_inputs: label_input,
+                    #     }
+                    #     zs_dist, zs_sample, zg_dist, zg_sample, _, _ = sess.run(
+                    #         [
+                    #             Zsent_distribution, zsent_sample,
+                    #             Zglobal_distribition, zglobal_sample,
+                    #             zsent_state, zglobal_state
+                    #         ],
+                    #         feed_dict=feed
+                    #     )
+
+                    #     mi_s = sess.run(
+                    #         mutual_info,
+                    #         feed_dict={
+                    #             mi_mu: zs_dist[0],
+                    #             mi_logvar: zs_dist[1],
+                    #             mi_samples: zs_sample
+                    #         }
+                    #     )
+                    #     sent_mi += mi_s * batch_size
+
+                    #     mi_g = sess.run(
+                    #         mutual_info,
+                    #         feed_dict={
+                    #             mi_mu: zg_dist[0],
+                    #             mi_logvar: zg_dist[1],
+                    #             mi_samples: zg_sample
+                    #         }
+                    #     )
+                    #     global_mi += mi_g * batch_size
+
+                    # sent_mi /= num_examples
+                    # global_mi /= num_examples
+
+                    # smi.append(sent_mi)
+                    # gmi.append(global_mi)
+                    ## Mutual Information calculation ends
+
+
                     write_lists_to_file(
                         'test_plot.txt', all_alpha, all_beta, all_tlb, all_kl,
                         all_klzg, all_klzs, all_rl, all_lrl, all_wrl
                     )
+                    # write_lists_to_file(
+                    #     'test_plot_extra.txt', all_alpha, all_beta, smi, gmi, all_zc_mu, all_zc_sigma
+                    # )
+                    # write_lists_to_file(
+                    #     'test_plot_extra.txt', all_alpha, all_beta, all_w_ppl, all_l_ppl, smi, gmi, all_zc_mu, all_zc_sigma
+                    # )
 
                     if cur_it % 100 == 0 and cur_it != 0:
                         path_to_save = os.path.join(
@@ -388,6 +561,42 @@ def main(params):
                         )
                         # print(model_path_name)
 
+                w_ppl, l_ppl = 0,0
+                batch_size = params.batch_size
+                num_examples=0
+                for p_it in range(len(encoder_val_data)//batch_size):
+                    s_idx = p_it * batch_size
+                    e_idx = (p_it + 1) * batch_size
+                    word_input = encoder_val_data[s_idx:e_idx]
+                    word_input = zero_pad(word_input, pad)
+                    shifted_word_input = encoder_val_data_shifted[s_idx:e_idx]
+                    shifted_word_input = zero_pad(shifted_word_input, pad)
+                    label_input = val_labels_arr[s_idx:e_idx]
+                    label_input = zero_pad(label_input, pad)
+                    num_examples += batch_size
+
+                    wp, lp = sess.run(
+                        [total_lower_bound,kl_term_weight],
+                        feed_dict={
+                            word_inputs: word_input,
+                            label_inputs: label_input,
+                            d_word_labels: shifted_word_input,
+                            d_label_labels: label_input,
+                            d_seq_length: length_,
+                            alpha: alpha_v,
+                            beta: beta_v
+                        }
+                    )
+
+                    l_ppl += lp*batch_size
+                    w_ppl += wp*batch_size
+
+                l_ppl /= num_examples
+                w_ppl /= num_examples
+
+                all_l_ppl.append(l_ppl)
+                all_w_ppl.append(w_ppl)
+                write_lists_to_file('test_plot_ppl.txt', all_l_ppl, all_w_ppl)
                 print("Time Taken:", datetime.datetime.now() - epoch_start_time)
 
 
