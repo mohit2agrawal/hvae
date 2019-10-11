@@ -53,7 +53,6 @@ def ptb_read(data_path):
 
     return sentences_data, label_data, val_data, val_label_data
 
-
 class Dictionary(object):
     def __init__(
         self, sentences, labels, val_sentences, val_labels, vocab_drop
@@ -320,6 +319,7 @@ class Dictionary(object):
         return len(self.idx2word)
 
 
+
 def train_w2vec(
     embed_fn,
     embed_size,
@@ -349,7 +349,7 @@ def train_w2vec(
         min_count=0,
         window=5,
         iter=w2vec_it
-    )  #CBOW MODEL IS USED AND Embed_size default
+    )  # CBOW MODEL IS USED AND Embed_size default
     w2vec.build_vocab(sentences=sentences)
     print("Training w2vec")
     w2vec.train(
@@ -378,14 +378,13 @@ def save_data(sentences, pkl_file, text_file):
             wf.write("\n")
 
 
-def prepare_data(
-    data_raw, labels_raw, val_data_raw, val_labels_raw, params, data_path
-):
+def prepare_data(data_raw, labels_raw, val_data_raw, val_labels_raw, params, data_path):
     # get embeddings, prepare data
     print("building dictionary")
     data_dict = Dictionary(
         data_raw, labels_raw, val_data_raw, val_labels_raw, params.vocab_drop
     )
+    #data_dict = Dictionary(data_raw, labels_raw, params.vocab_drop)
     save_data(
         data_dict.sentences,
         "./trained_embeddings_" + params.name + "/sentences_mod.pickle",
@@ -396,16 +395,6 @@ def prepare_data(
         "./trained_embeddings_" + params.name + "/labels_mod.pickle",
         os.path.join(data_path, 'labels_mod.txt')
     )
-    save_data(
-        data_dict.val_sentences,
-        "./trained_embeddings_" + params.name + "/val_sentences_mod.pickle",
-        os.path.join(data_path, 'val_data_mod.txt')
-    )
-    save_data(
-        data_dict.val_labels,
-        "./trained_embeddings_" + params.name + "/val_labels_mod.pickle",
-        os.path.join(data_path, 'val_labels_mod.txt')
-    )
 
     model_path = "./trained_embeddings_" + params.name
     filename = os.path.join(model_path, "embedding_file.pkl")
@@ -415,12 +404,11 @@ def prepare_data(
             embed_arr = pickle.load(rf)
 
     else:
-        en_align_dictionary = FastVector(vector_file='wiki.en.align.vec')
-        print("loaded the files..")
+        vector_file = 'wiki.en.align.vec'
+        en_align_dictionary = FastVector(vector_file=vector_file)
+        print("loaded:", vector_file)
 
-        embed_arr = np.zeros(
-            [data_dict.vocab_size, params.embed_size]
-        )
+        embed_arr = np.zeros([data_dict.vocab_size, params.embed_size])
         for i in range(1, embed_arr.shape[0]):
             # print(i)
             try:
@@ -457,16 +445,18 @@ def prepare_data(
         [data_dict.word2idx[word] for word in sent[:-1]]
         for sent in data_dict.sentences if len(sent) < params.sent_max_size - 2
     ]
-
     encoder_data = [
         [data_dict.word2idx[word] for word in sent[1:]]
         for sent in data_dict.sentences if len(sent) < params.sent_max_size - 2
     ]
-
     encoder_val_data = [
         [data_dict.word2idx[word] for word in sent[1:]]
         for sent in data_dict.val_sentences
         if len(sent) < params.sent_max_size - 2
+    ]
+    decoder_data = [
+        [data_dict.word2idx[word] for word in sent[:-1]]
+        for sent in data_dict.sentences if len(sent) < params.sent_max_size - 2
     ]
 
     sizes = data_dict.sizes
@@ -489,6 +479,12 @@ def prepare_data(
             a.append(index - s)
         encoder_data_adjusted_idx.append(a)
 
+    ## label encodings
+    # label_embed_arr = np.zeros(
+    #     [len(data_dict.l_word2idx.keys()), params.label_embed_size]
+    # )
+    # for i in range(len(data_dict.l_word2idx.keys())):
+    #     label_embed_arr[i][i] = 1
     label_embed_arr = np.eye(len(data_dict.l_word2idx.keys()))
     labels = [
         [data_dict.l_word2idx[word] for word in sent[:-1]]
@@ -498,7 +494,10 @@ def prepare_data(
         [data_dict.l_word2idx[word] for word in sent[1:]]
         for sent in data_dict.labels if len(sent) < params.sent_max_size - 2
     ]
-
+    decoder_labels = [
+        [data_dict.l_word2idx[word] for word in sent[:-1]]
+        for sent in data_dict.labels if len(sent) < params.sent_max_size - 2
+    ]
     val_labels = [
         [data_dict.l_word2idx[word] for word in sent[1:]]
         for sent in data_dict.val_labels if len(sent) < params.sent_max_size - 2]
@@ -514,4 +513,4 @@ def prepare_data(
             len(data_raw), data_dict.vocab_size, len(data)
         )
     )
-    return data, encoder_data, encoder_data_adjusted_idx, embed_arr, data_dict, labels, encoder_labels, label_embed_arr, encoder_val_data, val_labels
+    return data, encoder_data, encoder_data_adjusted_idx, embed_arr, data_dict, labels, encoder_labels, label_embed_arr, encoder_val_data, val_labels, decoder_data, decoder_labels

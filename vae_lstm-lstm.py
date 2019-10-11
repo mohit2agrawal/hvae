@@ -115,12 +115,14 @@ def main(params):
         'ptb_pos': './DATA/ptb_pos'
     }.get(params.name)
     # data in form [data, labels]
+    
+    #train_data_raw, train_label_raw = data_.ptb_read(data_folder)
     train_data_raw, train_label_raw, val_data_raw, val_label_raw  = data_.ptb_read(data_folder)
     #word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, encoder_val_data, val_labels_arr = data_.prepare_data(
     #    train_data_raw, train_label_raw, val_data_raw, val_label_raw, params, data_folder
     #)
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, label_data, label_labels_arr, label_embed_arr, decoder_words, decoder_labels = \
-    data_.prepare_data(train_data_raw, train_label_raw, params, data_folder)
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, label_data, label_labels_arr, label_embed_arr, encoder_val_data, val_labels_arr, decoder_words, decoder_labels = \
+    data_.prepare_data(train_data_raw, train_label_raw, val_data_raw, val_label_raw, params, data_folder)
 
     max_sent_len = max(max(map(len, word_data)),
                        max(map(len, encoder_word_data)))
@@ -189,9 +191,10 @@ def main(params):
                 # )
 
         # inputs = tf.unstack(inputs, num=num_steps, axis=1)
-        sizes = data_dict.sizes
+        sizes = word_data_dict.sizes
         word_vocab_size = max(sizes)
-        label_vocab_size = data_dict.label_vocab_size
+        label_vocab_size = word_data_dict.label_vocab_size
+        #label_vocab_size = label_data_dict.label_vocab_size
         # seq_length = tf.placeholder_with_default([0.0], shape=[None])
         d_seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
         # qz = q_net(word_inputs, seq_length, params.batch_size)
@@ -250,7 +253,6 @@ def main(params):
 
         alpha = tf.placeholder(tf.float64)
         # alpha_val = tf.to_float(alpha)
-
         beta = tf.placeholder(tf.float64)
         # beta_val = tf.to_float(beta)
         kl_term_weight = - tf.multiply(tf.cast(alpha, dtype=tf.float64), tf.cast(neg_kld_zsent, dtype=tf.float64)) \
@@ -348,7 +350,8 @@ def main(params):
             word_labels_arr = np.array(word_labels_arr)
             encoder_word_data = np.array(encoder_word_data)
             label_labels_arr = np.array(label_labels_arr)
-
+            decoder_words = np.array(decoder_words)
+            decoder_labels = np.array(decoder_labels)
             sub_iter = 0  ## for aggressive encoder optim
             aggressive = True
             pre_mi = 0
