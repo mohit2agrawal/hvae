@@ -116,29 +116,39 @@ def main(params):
     }.get(params.name)
     # data in form [data, labels]
     train_data_raw, train_label_raw, val_data_raw, val_label_raw  = data_.ptb_read(data_folder)
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, encoder_val_data, val_labels_arr = data_.prepare_data(
-        train_data_raw, train_label_raw, val_data_raw, val_label_raw, params, data_folder
-    )
+    #word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, encoder_val_data, val_labels_arr = data_.prepare_data(
+    #    train_data_raw, train_label_raw, val_data_raw, val_label_raw, params, data_folder
+    #)
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, label_data, label_labels_arr, label_embed_arr, decoder_words, decoder_labels = \
+    data_.prepare_data(train_data_raw, train_label_raw, params, data_folder)
 
     max_sent_len = max(max(map(len, word_data)),
                        max(map(len, encoder_word_data)))
     max_sent_len = max(max_sent_len, max(map(len, encoder_val_data)))
 
     with tf.Graph().as_default() as graph:
+        label_inputs = tf.placeholder(
+            dtype=tf.int32, shape=[None, None], name="lable_inputs"
+        )
+        word_inputs = tf.placeholder(
+            dtype=tf.int32, shape=[None, None], name="word_inputs"
+        )
 
-        label_inputs = tf.placeholder(dtype=tf.int32,
-                                      shape=[None, None],
-                                      name="label_inputs")
-        word_inputs = tf.placeholder(dtype=tf.int32,
-                                     shape=[None, None],
-                                     name="word_inputs")
+        d_word_labels = tf.placeholder(
+            shape=[None, None], dtype=tf.int32, name="d_word_labels"
+        )
+        d_label_labels = tf.placeholder(
+            shape=[None, None], dtype=tf.int32, name="d_label_labels"
+        )
 
-        d_word_labels = tf.placeholder(shape=[None, None],
-                                       dtype=tf.int32,
-                                       name="d_word_labels")
-        d_label_labels = tf.placeholder(shape=[None, None],
-                                        dtype=tf.int32,
-                                        name="d_label_labels")
+        d_word_inputs = tf.placeholder(
+            dtype=tf.int32, shape=[None, None], name="d_word_inputs"
+        )
+        d_label_inputs = tf.placeholder(
+            dtype=tf.int32, shape=[None, None], name="d_label_inputs"
+        )
+
+
 
         with tf.device("/cpu:0"):
             if not params.pre_trained_embed:
@@ -189,8 +199,10 @@ def main(params):
         Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
             vect_inputs, label_inputs_1, params.batch_size, max_sent_len)
         word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _, dec_word_states, dec_label_states = decoder(
-            zglobal_sample, params.batch_size, word_vocab_size,
-            label_vocab_size, max_sent_len)
+            d_word_inputs, d_label_inputs, zglobal_sample, params.batch_size,
+            word_vocab_size, label_vocab_size, max_sent_len, word_embedding,
+            label_embedding)
+        #decoder(zglobal_sample, params.batch_size, word_vocab_size,label_vocab_size, max_sent_len)
 
         neg_kld_zsent = -1 * tf.reduce_mean(
             tf.reduce_sum(
@@ -372,7 +384,8 @@ def main(params):
                             sent_dec_l_batch = word_labels_arr[indices]
                             sent_l_batch = encoder_word_data[indices]
                             label_l_batch = label_labels_arr[indices]
-
+                            dec_word_inp_batch = decoder_words[indices]
+                            dec_label_inp_batch = decoder_labels[indices]
                             ## burn_batch_size, burn_sents_len = sent_l_batch.shape
                             ## TODO the burn_sents_len will be different for each idx?
                             burn_batch_size = len(sent_l_batch)
@@ -388,6 +401,8 @@ def main(params):
                             sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
                             sent_l_batch = zero_pad(sent_l_batch, pad)
                             label_l_batch = zero_pad(label_l_batch, pad)
+                            dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                            dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
 
                             feed = {
                                 word_inputs: sent_l_batch,
@@ -395,6 +410,8 @@ def main(params):
                                 d_word_labels: sent_dec_l_batch,
                                 d_label_labels: label_l_batch,
                                 d_seq_length: length_,
+                                d_word_inputs: dec_word_inp_batch,
+                                d_label_inputs: dec_label_inp_batch,
                                 alpha: alpha_v,
                                 beta: beta_v
                             }
@@ -426,23 +443,28 @@ def main(params):
                         label_batch = label_data[indices]
                         sent_dec_l_batch = word_labels_arr[indices]
                         sent_l_batch = encoder_word_data[indices]
-                        #print("Debug size", len(sent_l_batch), len(sent_dec_l_batc))
-			label_l_batch = label_labels_arr[indices]
+                        label_l_batch = label_labels_arr[indices]
+                        dec_word_inp_batch = decoder_words[indices]
+                        dec_label_inp_batch = decoder_labels[indices]
                         length_ = np.array([len(sent) for sent in sent_batch
                                                 ]).reshape(params.batch_size)
-			#print("Debug size", sent_l_batch.shape, sent_dec_l_batch.shape, length_.shape)
-			
-			sent_batch = zero_pad(sent_batch, pad)
+                        #print("Debug size", sent_l_batch.shape, sent_dec_l_batch.shape, length_.shape)
+                        sent_batch = zero_pad(sent_batch, pad)
                         label_batch = zero_pad(label_batch, pad)
                         sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
                         sent_l_batch = zero_pad(sent_l_batch, pad)
                         label_l_batch = zero_pad(label_l_batch, pad)
-			feed = {
+                        dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                        dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
+                        
+                        feed = {
                             word_inputs: sent_l_batch,
                             label_inputs: label_l_batch,
                             d_word_labels: sent_dec_l_batch,
                             d_label_labels: label_l_batch,
                             d_seq_length: length_,
+                            d_word_inputs: dec_word_inp_batch,
+                            d_label_inputs: dec_label_inp_batch,
                             alpha: alpha_v,
                             beta: beta_v
                         }
@@ -462,6 +484,8 @@ def main(params):
                         sent_dec_l_batch = word_labels_arr[start_idx:end_idx]
                         sent_l_batch = encoder_word_data[start_idx:end_idx]
                         label_l_batch = label_labels_arr[start_idx:end_idx]
+                        dec_word_inp_batch = decoder_words[indices]
+                        dec_label_inp_batch = decoder_labels[indices]
 
                         # not optimal!!
                         length_ = np.array([len(sent) for sent in sent_batch
@@ -472,13 +496,17 @@ def main(params):
                         sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
                         sent_l_batch = zero_pad(sent_l_batch, pad)
                         label_l_batch = zero_pad(label_l_batch, pad)
-
+                        dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                        dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
+                        
                         feed = {
                             word_inputs: sent_l_batch,
                             label_inputs: label_l_batch,
                             d_word_labels: sent_dec_l_batch,
                             d_label_labels: label_l_batch,
                             d_seq_length: length_,
+                            d_word_inputs: dec_word_inp_batch,
+                            d_label_inputs: dec_label_inp_batch,
                             alpha: alpha_v,
                             beta: beta_v
                         }

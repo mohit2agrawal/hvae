@@ -425,12 +425,19 @@ def lstm_decoder_words(
 
 
 def decoder_model(
+    word_input,
+    label_input,
     zl,
     zc,
     batch_size,
     label_vocab_size,
     word_vocab_size,
     max_sent_len,
+    word_embed,
+    label_embed,
+    class_vocab_sizes=None,
+    label_bos_idx=None,
+    word_bos_idx=None,
     gen_mode=False,
 ):
     ## the two LSTM cells
@@ -440,6 +447,13 @@ def decoder_model(
     word_cell = tf.contrib.rnn.LSTMCell(
         params.decoder_hidden, dtype=tf.float64, state_is_tuple=False
     )
+
+    if not gen_mode:
+        word_input = tf.nn.embedding_lookup(word_embed, word_input)
+        label_input = tf.nn.embedding_lookup(label_embed, label_input)
+        ## 'time' major tensors
+        word_input_t = tf.transpose(word_input, [1, 0, 2])
+        label_input_t = tf.transpose(label_input, [1, 0, 2])
 
     ## Fully Connected layers for logits
     label_dense_layer = tf.layers.Dense(label_vocab_size, activation=None)
@@ -453,36 +467,88 @@ def decoder_model(
         word_cell.zero_state(batch_size, tf.float64)
     )
 
-    ## initial input to label LSTM, concat(zl, zero word state)
-    label_cell_input = tf.concat([zl, word_cell_state], -1)
-
     word_logits_arr = []
     label_logits_arr = []
     word_state_arr = []
     label_state_arr = []
+
+    if gen_mode:
+        pred_label_indices = []
+        pred_word_indices = []
+        to_add = [0]
+        s = 0
+        for x in class_vocab_sizes:
+            s += x
+            to_add.append(s)
+
+        pred_label_embedding = tf.nn.embedding_lookup(
+            label_embed, [label_bos_idx]
+        )
+        pred_word_embedding = tf.nn.embedding_lookup(word_embed, [word_bos_idx])
+
     ## compute the LSTM outputs
     for i in range(max_sent_len):
         ## run the label decoder LSTM
+        ## input for the label decoder LSTM
+        ##     takes word_cell_state from prev iter
+        # label_embedding = tf.nn.embedding_lookup(label_embed, pred_label)
+        if gen_mode:
+            label_embedding_input = pred_label_embedding
+        else:
+            label_embedding_input = label_input_t[i]
+        label_cell_input = tf.concat(
+            [zl, word_cell_state, label_embedding_input], axis=-1
+        )
         label_cell_output, label_cell_state = label_cell(
             label_cell_input, label_cell_state
         )
         ## get the label logits
         label_logits = label_dense_layer(label_cell_output)
         label_logits_softmax = tf.nn.softmax(label_logits)
+
+        if gen_mode:
+            ## sample 1 label from softmax values
+            pred_label_idx = tf.random.categorical(label_logits_softmax,
+                                                   1)[0][0]
+            pred_label_indices.append(pred_label_idx)
+            pred_label_embedding = tf.nn.embedding_lookup(
+                label_embed, [pred_label_idx]
+            )
+
         label_logits_arr.append(label_logits)
         label_state_arr.append(label_cell_state)
 
         ## concat zc and label logits and run the word decoder LSTM
-        word_cell_input = tf.concat([zc, label_logits_softmax], axis=-1)
+        # word_embedding = tf.nn.embedding_lookup(word_embed, pred_word)
+        if gen_mode:
+            word_embedding_input = pred_word_embedding
+        else:
+            word_embedding_input = word_input_t[i]
+        word_cell_input = tf.concat(
+            [zc, label_logits_softmax, word_embedding_input], axis=-1
+        )
         word_cell_output, word_cell_state = word_cell(
             word_cell_input, word_cell_state
         )
 
-        ## input for the label decoder LSTM for next time step
-        label_cell_input = tf.concat([zl, word_cell_state], axis=-1)
-
         ## get word logits
         word_logits = word_dense_layer(word_cell_output)
+        word_logits_softmax = tf.nn.softmax(word_logits)
+
+        if gen_mode:
+            ## sample 1 word from softmax values
+            class_size = tf.gather(class_vocab_sizes, pred_label_idx)
+            pred_word_idx = tf.random.categorical(
+                tf.slice(word_logits_softmax,[0,0],[1,class_size]), 1
+            )[0][0]
+            pred_word_idx += tf.cast(
+                tf.gather(to_add, pred_label_idx), tf.int64
+            )
+            pred_word_indices.append(pred_word_idx)
+            pred_word_embedding = tf.nn.embedding_lookup(
+                word_embed, [pred_word_idx]
+            )
+
         word_logits_arr.append(word_logits)
         word_state_arr.append(word_cell_state)
 
@@ -500,21 +566,27 @@ def decoder_model(
         label_sample = tf.multinomial(
             label_logits_all / params.temperature, 10
         )[0]
+
+    if gen_mode:
+        return word_logits_all, label_logits_all, word_sample, label_sample, word_state_all, label_state_all, pred_label_indices, pred_word_indices
     return word_logits_all, label_logits_all, word_sample, label_sample, word_state_all, label_state_all
 
 
 def decoder(
+    word_input,
+    label_input,
     zglobal_sample,
     batch_size,
     word_vocab_size,
     label_vocab_size,
     max_sent_len,
+    word_embed,
+    label_embed,
+    class_vocab_sizes=None,
+    label_bos_idx=None,
+    word_bos_idx=None,
     gen_mode=False,
-    zsent=None,
-    inp_logits=None
 ):
-    ##TODO: write code for gen_mode=True
-
     with tf.variable_scope("decoder") as sc:
         ## compute zc
         zsent_dec_mu, zsent_dec_logvar, zsent_dec_sample = gauss_layer(
@@ -523,14 +595,26 @@ def decoder(
         zsent_dec_distribution = [zsent_dec_mu, zsent_dec_logvar]
 
         Zglobal_dec_distribution = [0., np.log(1.0**2).astype(np.float64)]
-        word_logits, label_logits, w_sample, l_sample, w_cell_state, l_cell_state = decoder_model(
+        decoder_output = decoder_model(
+            word_input,
+            label_input,
             zglobal_sample,
             zsent_dec_sample,
             batch_size,
             label_vocab_size,
             word_vocab_size,
             max_sent_len,
+            word_embed,
+            label_embed,
+            class_vocab_sizes,
+            label_bos_idx,
+            word_bos_idx,
             gen_mode,
         )
 
+    if gen_mode:
+        word_logits, label_logits, w_sample, l_sample, w_cell_state, l_cell_state, pred_label_indices, pred_word_indices = decoder_output
+        return word_logits, label_logits, zsent_dec_distribution, Zglobal_dec_distribution, l_sample, w_sample, zsent_dec_sample, w_cell_state, l_cell_state, pred_label_indices, pred_word_indices
+
+    word_logits, label_logits, w_sample, l_sample, w_cell_state, l_cell_state = decoder_output
     return word_logits, label_logits, zsent_dec_distribution, Zglobal_dec_distribution, l_sample, w_sample, zsent_dec_sample, w_cell_state, l_cell_state
