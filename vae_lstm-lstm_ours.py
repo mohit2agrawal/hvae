@@ -10,7 +10,7 @@ from tensorflow.python.util.nest import flatten
 import utils.data as data_
 import utils.label_data as label_data_
 import utils.model as model
-from hvae_model_our import decoder, encoder
+from hvae_model import decoder, encoder
 from utils import parameters
 from utils.beam_search import beam_search
 from utils.ptb import reader
@@ -254,7 +254,7 @@ def main(params):
                                      name='adam')
         optimize = opt.apply_gradients(
             zip(clipped_grad, tf.trainable_variables()))
-
+	
         gradients_encoder = tf.gradients(total_lower_bound,
                                          tf.trainable_variables('encoder'),
                                          name='gradients_encoder')
@@ -283,8 +283,14 @@ def main(params):
         gradients_decoder = tf.gradients(
              total_lower_bound, tf.trainable_variables('decoder')
          )
-        clipped_grad_decoder = tf.clip_by_global_norm(gradients_decoder, 5)
-        optimize_decoder = opt.apply_gradients(
+        clipped_grad_decoder, _ = tf.clip_by_global_norm(gradients_decoder, 5)
+        #print("Debug variable:")
+	#print(tf.trainable_variables('decoder'))
+	#print("len:", clipped_grad_decoder)
+	#print("Encoder:", clipped_grad_encoder)
+        opt_decoder = tf.train.AdamOptimizer(
+            learning_rate=params.learning_rate, name='adam_decoder')
+        optimize_decoder = opt_decoder.apply_gradients(
              zip(clipped_grad_decoder, tf.trainable_variables('decoder'))
         )
 
@@ -420,8 +426,18 @@ def main(params):
                         label_batch = label_data[indices]
                         sent_dec_l_batch = word_labels_arr[indices]
                         sent_l_batch = encoder_word_data[indices]
-                        label_l_batch = label_labels_arr[indices]
-                        feed = {
+                        #print("Debug size", len(sent_l_batch), len(sent_dec_l_batc))
+			label_l_batch = label_labels_arr[indices]
+                        length_ = np.array([len(sent) for sent in sent_batch
+                                                ]).reshape(params.batch_size)
+			#print("Debug size", sent_l_batch.shape, sent_dec_l_batch.shape, length_.shape)
+			
+			sent_batch = zero_pad(sent_batch, pad)
+                        label_batch = zero_pad(label_batch, pad)
+                        sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
+                        sent_l_batch = zero_pad(sent_l_batch, pad)
+                        label_l_batch = zero_pad(label_l_batch, pad)
+			feed = {
                             word_inputs: sent_l_batch,
                             label_inputs: label_l_batch,
                             d_word_labels: sent_dec_l_batch,
@@ -478,13 +494,13 @@ def main(params):
                             ],
                             feed_dict=feed)
 
-                    all_alpha.append(alpha_v)
-                    all_beta.append(beta_v)
-                    all_tlb.append(tlb)
-                    all_kl.append(klw)
-                    all_klzg.append(-kzg)
-                    all_klzs.append(-kzs)
-                    write_lists_to_file('test_plot.txt', all_alpha,
+                    	all_alpha.append(alpha_v)
+                    	all_beta.append(beta_v)
+                    	all_tlb.append(tlb)
+                    	all_kl.append(klw)
+                    	all_klzg.append(-kzg)
+                    	all_klzs.append(-kzs)
+                    	write_lists_to_file('test_plot.txt', all_alpha,
                                         all_beta, all_tlb, all_kl,
                                         all_klzg, all_klzs)
 
