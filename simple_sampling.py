@@ -49,11 +49,20 @@ def rnn_placeholders(state):
         return tuple(structure)
 
 
-def softmax(x):
+def softmax(x, zero_probs=None):
     """Compute softmax values for each sets of scores in x."""
-    if x.ndim == 1:
-        return np.exp(x) / np.sum(np.exp(x))
-    return np.exp(x) / np.sum(np.exp(x), axis=1, keepdims=True)
+    if x.ndim == 1:  ## for word logits passed in
+        ## let zero logits be zero prob (softmax)
+        x_nz = x[x != 0]
+        sm = np.zeros_like(x)
+        sm[x != 0] = np.exp(x_nz) / np.sum(np.exp(x_nz))
+        return sm
+    exp = np.exp(x)
+    if zero_probs:
+        for idx in zero_probs:
+            exp[:, idx] = 0
+    return exp / np.sum(exp, axis=1, keepdims=True)
+    ## if zero_probs
 
 
 def main(params):
@@ -65,30 +74,85 @@ def main(params):
         train_data_raw, train_label_raw, params, data_folder
     )
 
-    max_sent_len = max(map(len, word_data))
+    ## one word at a time
+    max_sent_len = 1
+    ## one sentence at a time
+    batch_size = 1
 
-    d_word_inputs = tf.placeholder(
-        dtype=tf.int32, shape=[None, None], name="d_word_inputs"
-    )
-    d_label_inputs = tf.placeholder(
-        dtype=tf.int32, shape=[None, None], name="d_label_inputs"
-    )
+    word_vocab_size = max(data_dict.sizes)
+    label_vocab_size = data_dict.label_vocab_size
+    labels_set = data_dict.labels_set
 
-    class_vocab_sizes = [1] * data_dict.sizes[0] + data_dict.sizes[1:]
+    label_bos_index = data_dict.l_word2idx[data_dict.bos]
+    label_eos_index = data_dict.l_word2idx[data_dict.eos]
+    label_pad_index = data_dict.l_word2idx[data_dict.pad]
+
+    sizes = data_dict.sizes
+    ranges = []
+    i = 0
+    s = 0
+    for i in range(len(sizes)):
+        s += sizes[i]
+        ranges.append(s)
+
+    ## ranges stores the index(+1) of the label's last word
+    ## sizes are vocab size of the labels
+    ##       including size(specials) at [0]
+    ## sizes : 4  10   5   7
+    ## ranges: 4  14  19  26
+    ## but, the labels_set will be of length len(ranges) - 1
+    ##      it does not have "specials"
+
+    # if no_word_repetition:
+    #     appeared_words = dict()
+    #     for lbl in labels_set:
+    #         ls_idx = labels_set.index(lbl)
+    #         appeared_words[lbl] = np.zeros(sizes[ls_idx + 1])
 
     with tf.Graph().as_default() as graph:
-        word_vocab_size = max(data_dict.sizes)
-        label_vocab_size = data_dict.label_vocab_size
 
         zglobal_sample = tf.placeholder(
             dtype=tf.float64, shape=[None, params.latent_size]
         )
+        d_word_inputs = tf.placeholder(
+            dtype=tf.int32, shape=[1], name="d_word_inputs"
+        )
+        d_label_inputs = tf.placeholder(
+            dtype=tf.int32, shape=[1], name="d_label_inputs"
+        )
+
+        label_cell_state = tf.placeholder(
+            dtype=tf.float64,
+            shape=[1, 2 * params.decoder_hidden],
+            name="label_cell_state"
+        )
+        word_cell_state = tf.placeholder(
+            dtype=tf.float64,
+            shape=[1, 2 * params.decoder_hidden],
+            name="word_cell_state"
+        )
+        zsent_dec_mu = tf.placeholder(
+            dtype=tf.float64,
+            shape=[1, params.latent_size],
+            name="zsent_dec_mu"
+        )
+        zsent_dec_logvar = tf.placeholder(
+            dtype=tf.float64,
+            shape=[1, params.latent_size],
+            name="zsent_dec_logvar"
+        )
+        zsent_dec_sample = tf.placeholder(
+            dtype=tf.float64,
+            shape=[1, params.latent_size],
+            name="zsent_dec_sample"
+        )
+
         word_embedding = tf.Variable(
             word_embed_arr,
             trainable=params.fine_tune_embed,
             name="word_embedding",
             dtype=tf.float64
-        )  # creates a variable that can be used as a tensor
+        )
         label_embedding = tf.Variable(
             label_embed_arr,
             trainable=params.fine_tune_embed,
@@ -96,25 +160,26 @@ def main(params):
             dtype=tf.float64
         )
 
-        _, _, _, _, _, _, _, _, _, pred_label_indices, pred_word_indices = decoder(
+        word_logits, label_logits, zsent_dec_distribution, _, _, _, zsent_dec_sample_out, w_cell_state, l_cell_state = decoder(
             d_word_inputs,
             d_label_inputs,
             zglobal_sample,
-            1,  # batch_size
+            batch_size,
             word_vocab_size,
             label_vocab_size,
             max_sent_len,
             word_embedding,
             label_embedding,
-            class_vocab_sizes=class_vocab_sizes,
-            label_bos_idx=data_dict.l_word2idx[data_dict.bos],
-            word_bos_idx=data_dict.word2idx[data_dict.bos],
             gen_mode=True,
+            label_cell_state=label_cell_state,
+            word_cell_state=word_cell_state,
+            zsent_dec_mu=zsent_dec_mu,
+            zsent_dec_logvar=zsent_dec_logvar,
+            zsent_dec_sample=zsent_dec_sample
         )
 
         saver = tf.train.Saver()
-        config = tf.ConfigProto(device_count={'GPU': 0})
-        with tf.Session(config=config) as sess:
+        with tf.Session() as sess:
             sess.run(
                 [
                     tf.global_variables_initializer(),
@@ -134,25 +199,166 @@ def main(params):
                 exit()
                 # traceback.print_exc()
 
-            batch_size = 1
             number_of_samples = params.num_samples
             out_sentence_file = "./generated_sentences.txt"
             out_labels_file = "./generated_labels.txt"
+
+            biased_sampling = False
+            no_word_repetition = False
 
             with open(out_sentence_file,
                       'w+') as sent_f, open(out_labels_file, 'w+') as label_f:
 
                 for num in tqdm(range(number_of_samples)):
-                    params.is_training = False
-
                     z = np.random.normal(0, 1, (1, params.latent_size))
-                    l_indices, w_indices = sess.run(
-                        [pred_label_indices, pred_word_indices],
-                        feed_dict={zglobal_sample: z}
+                    lc_state = np.zeros([1, 2 * params.decoder_hidden])
+                    wc_state = np.zeros([1, 2 * params.decoder_hidden])
+
+                    zs_mu = np.zeros([1, params.latent_size], dtype=np.float64)
+                    zs_logvar = np.zeros(
+                        [1, params.latent_size], dtype=np.float64
+                    )
+                    zs_sample = np.zeros(
+                        [1, params.latent_size], dtype=np.float64
                     )
 
-                    labels = [data_dict.l_idx2word[i] for i in l_indices]
-                    words = [data_dict.idx2word[i] for i in l_indices]
+                    pred_word_idx = data_dict.word2idx[data_dict.bos]
+                    pred_label_idx = data_dict.l_word2idx[data_dict.bos]
+
+                    words = []
+                    labels = []
+
+                    sent_len = 0
+
+                    while True:
+                        # if sent_len == 0:
+                        #     feed = {
+                        #         zglobal_sample: z,
+                        #         d_word_inputs: [pred_word_idx],
+                        #         d_label_inputs: [pred_label_idx]
+                        #     }
+                        # else:
+                        # feed = {
+                        #     zglobal_sample: z,
+                        #     d_word_inputs: [pred_word_idx],
+                        #     d_label_inputs: [pred_label_idx],
+                        #     label_cell_state: lc_state,
+                        #     word_cell_state: wc_state,
+                        #     zsent_dec_mu: zs_mu,
+                        #     zsent_dec_logvar: zs_logvar,
+                        #     zsent_dec_sample: zs_sample
+                        # }
+
+                        # print('words predicted:', sent_len)
+                        # print('inputs')
+                        # print('z:\n', z)
+                        # print('pred_word_idx:\n', [pred_word_idx])
+                        # print('pred_label_idx:\n', [pred_label_idx])
+
+                        w_logit, l_logit, wc_state, lc_state, zs_dist, zs_sample = sess.run(
+                            [
+                                word_logits, label_logits, w_cell_state,
+                                l_cell_state, zsent_dec_distribution,
+                                zsent_dec_sample_out
+                            ],
+                            feed_dict={
+                                zglobal_sample: z,
+                                d_word_inputs: [pred_word_idx],
+                                d_label_inputs: [pred_label_idx],
+                                label_cell_state: lc_state,
+                                word_cell_state: wc_state,
+                                zsent_dec_sample: zs_sample,
+                                zsent_dec_mu: zs_mu,
+                                zsent_dec_logvar: zs_logvar,
+                            }
+                        )
+
+                        l_logit = l_logit[0]
+                        w_logit = w_logit[0]
+
+                        zs_mu, zs_logvar = zs_dist[0], zs_dist[1]
+                        # lc_state = l_states[0]
+                        # wc_state = w_states[0]
+
+                        # w_logits = w_logits.reshape(
+                        #     (max_sent_len, word_vocab_size)
+                        # )
+                        # l_logits = l_logits.reshape(
+                        #     (max_sent_len, label_vocab_size)
+                        # )
+
+                        ## logit for <BOS> should be zero
+                        l_logit[label_bos_index] = 0
+                        l_logit[label_pad_index] = 0
+                        if sent_len == 0:
+                            l_logit[label_eos_index] = 0
+
+                        ## biased sampling
+                        ## sample first label only from ['NOUN', 'DET']
+                        # if biased_sampling:
+                        #     start_labels = ['NOUN', 'DET']
+                        #     start_label_idxs = [
+                        #         data_dict.l_word2idx[l] for l in start_labels
+                        #     ]
+                        #     start_logits = l_logits[0, start_label_idxs]
+                        #     start_softmax = softmax(start_logits)
+
+                        ## calc softmax
+                        l_softmax = softmax(l_logit)
+                        # l_softmax = softmax(
+                        #     l_logit,
+                        #     zero_probs=[label_bos_index, label_pad_index]
+                        # )
+
+                        ## biased sampling (contd...)
+                        # if biased_sampling:
+                        #     l_softmax[0, :] = 0
+                        #     for idx, s_idx in enumerate(start_label_idxs):
+                        #         l_softmax[0, s_idx] = start_softmax[idx]
+
+                        # labels_idx = [
+                        #     np.random.choice(label_vocab_size, size=1,
+                        #                      p=smax)[0] for smax in l_softmax
+                        # ]
+                        # labels = [data_dict.l_idx2word[i] for i in labels_idx]
+                        # print('l_softmax')
+                        # print(l_softmax)
+                        pred_label_idx = np.random.choice(
+                            label_vocab_size, size=1, p=l_softmax
+                        )[0]
+                        pred_label = data_dict.l_idx2word[pred_label_idx]
+
+                        if pred_label in data_dict.specials:
+                            pred_word = pred_label
+                        else:
+                            ## given a label
+                            ## will have a range [idx1, idx2]
+                            ## in which words can fall
+
+                            ## labels_set index
+                            ls_idx = labels_set.index(pred_label)
+
+                            reqd_logit = w_logit[:sizes[ls_idx + 1]]
+                            # if no_word_repetition:
+                            #     reqd_logits *= np.ones(sizes[ls_idx + 1]) \
+                            #                     - appeared_words[label]
+                            ## sample the word
+                            pred_word_idx = np.random.choice(
+                                range(ranges[ls_idx], ranges[ls_idx + 1]),
+                                size=1,
+                                p=softmax(reqd_logit)
+                            )[0]
+                            pred_word = data_dict.idx2word[pred_word_idx]
+
+                            # if no_word_repetition:
+                            #     appeared_words[label][word_idx -
+                            #                             ranges[ls_idx]] = 1
+
+                        if pred_label == data_dict.eos:
+                            break
+                        labels.append(pred_label)
+                        words.append(pred_word)
+                        sent_len += 1
 
                     sent_f.write(' '.join(words))
                     sent_f.write('\n')
