@@ -2,9 +2,6 @@ from __future__ import print_function, division, absolute_import
 import tensorflow as tf
 import numpy as np
 
-# import zhusuan as zs
-# from zhusuan import reuse
-
 import utils.data as data_
 import utils.label_data as label_data_
 import utils.model as model
@@ -103,12 +100,6 @@ def main(params):
     ## but, the labels_set will be of length len(ranges) - 1
     ##      it does not have "specials"
 
-    # if no_word_repetition:
-    #     appeared_words = dict()
-    #     for lbl in labels_set:
-    #         ls_idx = labels_set.index(lbl)
-    #         appeared_words[lbl] = np.zeros(sizes[ls_idx + 1])
-
     with tf.Graph().as_default() as graph:
 
         zglobal_sample = tf.placeholder(
@@ -204,7 +195,7 @@ def main(params):
             out_labels_file = "./generated_labels.txt"
 
             biased_sampling = False
-            no_word_repetition = False
+            no_word_repetition = True
 
             with open(out_sentence_file,
                       'w+') as sent_f, open(out_labels_file, 'w+') as label_f:
@@ -230,31 +221,14 @@ def main(params):
 
                     sent_len = 0
 
+                    if no_word_repetition:
+                        appeared_words = dict()
+                        for lbl in labels_set:
+                            ls_idx = labels_set.index(lbl)
+                            appeared_words[lbl] = np.zeros(sizes[ls_idx + 1])
+
+                    ## sample until <EOS>
                     while True:
-                        # if sent_len == 0:
-                        #     feed = {
-                        #         zglobal_sample: z,
-                        #         d_word_inputs: [pred_word_idx],
-                        #         d_label_inputs: [pred_label_idx]
-                        #     }
-                        # else:
-                        # feed = {
-                        #     zglobal_sample: z,
-                        #     d_word_inputs: [pred_word_idx],
-                        #     d_label_inputs: [pred_label_idx],
-                        #     label_cell_state: lc_state,
-                        #     word_cell_state: wc_state,
-                        #     zsent_dec_mu: zs_mu,
-                        #     zsent_dec_logvar: zs_logvar,
-                        #     zsent_dec_sample: zs_sample
-                        # }
-
-                        # print('words predicted:', sent_len)
-                        # print('inputs')
-                        # print('z:\n', z)
-                        # print('pred_word_idx:\n', [pred_word_idx])
-                        # print('pred_label_idx:\n', [pred_label_idx])
-
                         w_logit, l_logit, wc_state, lc_state, zs_dist, zs_sample = sess.run(
                             [
                                 word_logits, label_logits, w_cell_state,
@@ -277,15 +251,6 @@ def main(params):
                         w_logit = w_logit[0]
 
                         zs_mu, zs_logvar = zs_dist[0], zs_dist[1]
-                        # lc_state = l_states[0]
-                        # wc_state = w_states[0]
-
-                        # w_logits = w_logits.reshape(
-                        #     (max_sent_len, word_vocab_size)
-                        # )
-                        # l_logits = l_logits.reshape(
-                        #     (max_sent_len, label_vocab_size)
-                        # )
 
                         ## logit for <BOS> should be zero
                         l_logit[label_bos_index] = 0
@@ -295,34 +260,22 @@ def main(params):
 
                         ## biased sampling
                         ## sample first label only from ['NOUN', 'DET']
-                        # if biased_sampling:
-                        #     start_labels = ['NOUN', 'DET']
-                        #     start_label_idxs = [
-                        #         data_dict.l_word2idx[l] for l in start_labels
-                        #     ]
-                        #     start_logits = l_logits[0, start_label_idxs]
-                        #     start_softmax = softmax(start_logits)
+                        if biased_sampling and sent_len == 0:
+                            start_labels = ['NOUN', 'DET']
+                            start_label_idxs = [
+                                data_dict.l_word2idx[l] for l in start_labels
+                            ]
+                            start_logit = l_logit[start_label_idxs]
+                            start_softmax = softmax(start_logit)
 
                         ## calc softmax
                         l_softmax = softmax(l_logit)
-                        # l_softmax = softmax(
-                        #     l_logit,
-                        #     zero_probs=[label_bos_index, label_pad_index]
-                        # )
 
                         ## biased sampling (contd...)
-                        # if biased_sampling:
-                        #     l_softmax[0, :] = 0
-                        #     for idx, s_idx in enumerate(start_label_idxs):
-                        #         l_softmax[0, s_idx] = start_softmax[idx]
+                        if biased_sampling and sent_len == 0:
+                            l_softmax[:] = 0
+                            l_softmax[start_label_idxs] = start_softmax
 
-                        # labels_idx = [
-                        #     np.random.choice(label_vocab_size, size=1,
-                        #                      p=smax)[0] for smax in l_softmax
-                        # ]
-                        # labels = [data_dict.l_idx2word[i] for i in labels_idx]
-                        # print('l_softmax')
-                        # print(l_softmax)
                         pred_label_idx = np.random.choice(
                             label_vocab_size, size=1, p=l_softmax
                         )[0]
@@ -339,9 +292,9 @@ def main(params):
                             ls_idx = labels_set.index(pred_label)
 
                             reqd_logit = w_logit[:sizes[ls_idx + 1]]
-                            # if no_word_repetition:
-                            #     reqd_logits *= np.ones(sizes[ls_idx + 1]) \
-                            #                     - appeared_words[label]
+                            if no_word_repetition:
+                                reqd_logit *= np.ones(sizes[ls_idx + 1]) \
+                                               - appeared_words[pred_label]
                             ## sample the word
                             pred_word_idx = np.random.choice(
                                 range(ranges[ls_idx], ranges[ls_idx + 1]),
@@ -350,9 +303,9 @@ def main(params):
                             )[0]
                             pred_word = data_dict.idx2word[pred_word_idx]
 
-                            # if no_word_repetition:
-                            #     appeared_words[label][word_idx -
-                            #                             ranges[ls_idx]] = 1
+                            if no_word_repetition:
+                                shifted_idx = pred_word_idx - ranges[ls_idx]
+                                appeared_words[pred_label][shifted_idx] = 1
 
                         if pred_label == data_dict.eos:
                             break
