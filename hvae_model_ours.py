@@ -36,7 +36,7 @@ def gauss_layer(inp, dim, mu_nl=None, logvar_nl=None, scope=None):
         logvar_nl(callable): nonlinearity for Gaussian log variance
         scope(str/VariableScope): tensorflow variable scope
     """
-    with tf.variable_scope(scope, "gauss") as sc:
+    with tf.variable_scope(scope + "/gauss") as sc:
         mu = fully_connected(
             inp,
             dim,
@@ -59,7 +59,7 @@ def gauss_layer(inp, dim, mu_nl=None, logvar_nl=None, scope=None):
 
         eps = tf.random_normal(tf.shape(logvar), name='eps', dtype=tf.float64)
         sample = mu + tf.exp(0.5 * logvar) * eps
-    return mu, logvar, sample
+    	return mu, logvar, sample
 
 
 def zglobal_encoder(label_input, zsent_sample, seq_len, batch_size):
@@ -153,30 +153,39 @@ def zsent_encoder(encoder_input, seq_len, batch_size):
 def encoder_model(word_input, label_input, batch_size, max_sent_len):
 
     ## LSTM cells
-    word_cell = tf.contrib.rnn.LSTMCell(
-        params.encoder_hidden, dtype=tf.float64, state_is_tuple=False
-    )
-    label_cell = tf.contrib.rnn.LSTMCell(
-        params.encoder_hidden, dtype=tf.float64, state_is_tuple=False
-    )
+    with tf.variable_scope("word"):
+    	word_cell = tf.contrib.rnn.LSTMCell(
+        	params.encoder_hidden, dtype=tf.float64, state_is_tuple=False
+    	)
+    	word_cell_state = word_cell.zero_state(batch_size, dtype=tf.float64)
+    	word_input_t = tf.transpose(word_input, [1, 0, 2])
+
+    with tf.variable_scope("label"):
+    	label_cell = tf.contrib.rnn.LSTMCell(
+        	params.encoder_hidden, dtype=tf.float64, state_is_tuple=False
+    	)
+    	label_cell_state = word_cell.zero_state(batch_size, dtype=tf.float64)
+    	label_input_t = tf.transpose(label_input, [1, 0, 2])
 
     ## initial (zero) states
-    word_cell_state = word_cell.zero_state(batch_size, dtype=tf.float64)
-    label_cell_state = word_cell.zero_state(batch_size, dtype=tf.float64)
+    
+    
 
     ## 'time' major tensors
-    word_input_t = tf.transpose(word_input, [1, 0, 2])
-    label_input_t = tf.transpose(label_input, [1, 0, 2])
+    
+    
 
     ## word_input.shape: [batch_size, time_steps, latent_dim]
     for i in range(max_sent_len):
-        word_cell_output, word_cell_state = word_cell(
+    	with tf.variable_scope("word"):
+        	word_cell_output, word_cell_state = word_cell(
             word_input_t[i], word_cell_state
-        )
-        label_cell_input = tf.concat([label_input_t[i], word_cell_state], -1)
-        label_cell_output, label_cell_state = label_cell(
-            label_cell_input, label_cell_state
-        )
+        	)
+        with tf.variable_scope("label"):
+        	label_cell_input = tf.concat([label_input_t[i], word_cell_state], -1)
+        	label_cell_output, label_cell_state = label_cell(
+            	label_cell_input, label_cell_state
+        	)
 
     return word_cell_state, label_cell_state
 
@@ -188,13 +197,13 @@ def encoder(encoder_input, label_input, batch_size, max_sent_len):
         )
 
         zsent_mu, zsent_logvar, zsent_sample = gauss_layer(
-            zsent_pre_out, params.latent_size, scope="zsent_enc_gauss"
+            zsent_pre_out, params.latent_size, scope="word"
         )
         Zsent_distribution = [zsent_mu, zsent_logvar]
 
         gauss_input = tf.concat([zglobal_pre_out, zsent_sample], -1)
         zglobal_mu, zglobal_logvar, zglobal_sample = gauss_layer(
-            gauss_input, params.latent_size, scope="zglobal_enc_gauss"
+            gauss_input, params.latent_size, scope="label"
         )
         Zglobal_distribition = [zglobal_mu, zglobal_logvar]
 
