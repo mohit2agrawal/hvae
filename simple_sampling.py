@@ -66,10 +66,15 @@ def main(params):
     # data_folder = './DATA/parallel_data_10k/'
     data_folder = './DATA/' + params.name
     # data in form [data, labels]
-    train_data_raw, train_label_raw = data_.ptb_read(data_folder)
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, decoder_words, decoder_labels = data_.prepare_data(
-        train_data_raw, train_label_raw, params, data_folder
+    train_data_raw, train_label_raw, val_data_raw, val_label_raw = data_.ptb_read(
+        data_folder
     )
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, encoder_val_data, encoder_val_data_shifted, val_labels_arr, decoder_val_words, decoder_val_labels = data_.prepare_data(
+        train_data_raw, train_label_raw, val_data_raw, val_label_raw, params,
+        data_folder
+    )
+
+    decoder_words, decoder_labels = word_data, label_data
 
     ## one word at a time
     max_sent_len = 1
@@ -194,7 +199,7 @@ def main(params):
             out_sentence_file = "./generated_sentences.txt"
             out_labels_file = "./generated_labels.txt"
 
-            biased_sampling = False
+            biased_sampling = True
             no_word_repetition = True
 
             with open(out_sentence_file,
@@ -306,6 +311,12 @@ def main(params):
                             if no_word_repetition:
                                 shifted_idx = pred_word_idx - ranges[ls_idx]
                                 appeared_words[pred_label][shifted_idx] = 1
+                                ## in case all have appeared, mark all as not appeared
+                                if not any(appeared_words[pred_label] == 0):
+                                    appeared_words[pred_label][:] = 0
+                                # if sum(appeared_words[pred_label] == 1
+                                #        ) == len(appeared_words[pred_label]):
+                                #     appeared_words[pred_label][:] = 0
 
                         if pred_label == data_dict.eos:
                             break

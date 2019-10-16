@@ -59,12 +59,19 @@ def main(params):
     # data_folder = './DATA/parallel_data_10k/'
     data_folder = './DATA/' + params.name
     # data in form [data, labels]
-    train_data_raw, train_label_raw = data_.ptb_read(data_folder)
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, word_data_dict, label_data, label_labels_arr, label_embed_arr, decoder_words, decoder_labels = data_.prepare_data(
-        train_data_raw, train_label_raw, params, data_folder
+    train_data_raw, train_label_raw, val_data_raw, val_label_raw = data_.ptb_read(
+        data_folder
+    )
+    word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, encoder_val_data, encoder_val_data_shifted, val_labels_arr, decoder_val_words, decoder_val_labels = data_.prepare_data(
+        train_data_raw, train_label_raw, val_data_raw, val_label_raw, params,
+        data_folder
     )
 
-    max_sent_len = max(map(len, word_data))
+    decoder_words, decoder_labels = word_data, label_data
+
+    max_sent_len = max(
+        max(map(len, word_data)), max(map(len, encoder_val_data))
+    )
 
     with tf.Graph().as_default() as graph:
 
@@ -122,8 +129,8 @@ def main(params):
                 )
 
         # inputs = tf.unstack(inputs, num=num_steps, axis=1)
-        word_vocab_size = max(word_data_dict.sizes)
-        label_vocab_size = word_data_dict.label_vocab_size
+        word_vocab_size = max(data_dict.sizes)
+        label_vocab_size = data_dict.label_vocab_size
         # seq_length = tf.placeholder_with_default([0.0], shape=[None])
         d_seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
         # qz = q_net(word_inputs, seq_length, params.batch_size)
@@ -278,6 +285,7 @@ def main(params):
 
             all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
             all_rl, all_wrl, all_lrl = [], [], []
+            all_l_ppl, all_w_ppl = [], []
 
             schedule = scheduler(
                 params.fn, params.num_epochs * num_iters, params.cycles,
@@ -290,6 +298,8 @@ def main(params):
             label_labels_arr = np.array(label_labels_arr)
             decoder_words = np.array(decoder_words)
             decoder_labels = np.array(decoder_labels)
+            decoder_val_labels = np.array(decoder_val_labels)
+            decoder_val_words = np.array(decoder_val_words)
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
                 print("Epoch: {} started at: {}".format(e, epoch_start_time))
@@ -391,6 +401,48 @@ def main(params):
                         )
                         # print(model_path_name)
 
+                w_ppl, l_ppl = 0, 0
+                batch_size = params.batch_size
+                num_examples = 0
+                for p_it in range(len(encoder_val_data) // batch_size):
+                    s_idx = p_it * batch_size
+                    e_idx = (p_it + 1) * batch_size
+                    word_input = encoder_val_data[s_idx:e_idx]
+                    word_input = zero_pad(word_input, pad)
+                    shifted_word_input = encoder_val_data_shifted[s_idx:e_idx]
+                    shifted_word_input = zero_pad(shifted_word_input, pad)
+                    label_input = val_labels_arr[s_idx:e_idx]
+                    label_input = zero_pad(label_input, pad)
+                    dec_inp_words = decoder_val_words[s_idx:e_idx]
+                    dec_inp_words = zero_pad(dec_inp_words, pad)
+                    dec_inp_labels = decoder_val_labels[s_idx:e_idx]
+                    dec_inp_labels = zero_pad(dec_inp_labels, pad)
+                    num_examples += batch_size
+
+                    wp, lp = sess.run(
+                        [total_lower_bound, kl_term_weight],
+                        feed_dict={
+                            word_inputs: word_input,
+                            label_inputs: label_input,
+                            d_word_labels: shifted_word_input,
+                            d_label_labels: label_input,
+                            d_seq_length: length_,
+                            d_word_inputs: dec_inp_words,
+                            d_label_inputs: dec_inp_labels,
+                            alpha: alpha_v,
+                            beta: beta_v
+                        }
+                    )
+
+                    l_ppl += lp * batch_size
+                    w_ppl += wp * batch_size
+
+                l_ppl /= num_examples
+                w_ppl /= num_examples
+
+                all_l_ppl.append(l_ppl)
+                all_w_ppl.append(w_ppl)
+                write_lists_to_file('test_plot_ppl.txt', all_l_ppl, all_w_ppl)
                 print("Time Taken:", datetime.datetime.now() - epoch_start_time)
 
 
