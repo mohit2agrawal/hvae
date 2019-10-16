@@ -348,19 +348,19 @@ def main(params):
 
         
 
-        mi_mu = tf.placeholder(shape=[params.batch_size, params.latent_size],
-                               dtype=tf.float64,
-                               name="mi_mu")
-        mi_logvar = tf.placeholder(
-            shape=[params.batch_size, params.latent_size],
-            dtype=tf.float64,
-            name="mi_logvar")
-        mi_samples = tf.placeholder(
-            shape=[params.batch_size, params.latent_size],
-            dtype=tf.float64,
-            name="mi_samples")
+        #mi_mu = tf.placeholder(shape=[params.batch_size, params.latent_size],
+        #                       dtype=tf.float64,
+        #                       name="mi_mu")
+        #mi_logvar = tf.placeholder(
+        #    shape=[params.batch_size, params.latent_size],
+        #    dtype=tf.float64,
+        #    name="mi_logvar")
+        #mi_samples = tf.placeholder(
+        #    shape=[params.batch_size, params.latent_size],
+        #    dtype=tf.float64,
+        #    name="mi_samples")
 
-        mutual_info = calc_mi_q(mi_mu, mi_logvar, mi_samples)
+        #mutual_info = calc_mi_q(mi_mu, mi_logvar, mi_samples)
         #mutual_info_new = calc_mi_q(mi_samples_1)
 
        
@@ -374,9 +374,7 @@ def main(params):
             print("*********")
             sess.run([
                 tf.global_variables_initializer(),
-                tf.local_variables_initializer()
-            ])
-
+                tf.local_variables_initializer()])
 
             total_parameters = 0
             for i, variable in enumerate(tf.trainable_variables()):
@@ -394,7 +392,7 @@ def main(params):
                 sess = tf_debug.LocalCLIDebugWrapperSession(sess)
             summary_writer = tf.summary.FileWriter(params.LOG_DIR, sess.graph)
             summary_writer.add_graph(sess.graph)
-            #ptb_data = PTBInput(params.batch_size, train_data)
+            
             num_iters = len(word_data) // params.batch_size
             cur_it = 0
 
@@ -415,7 +413,7 @@ def main(params):
 
             # zero padding
             pad = max_sent_len
-
+            no_batches = 
             alpha_v = beta_v = 1
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
@@ -430,71 +428,137 @@ def main(params):
                     rand_ids = np.random.permutation(len(word_data))
                     print('aggressive:', aggressive)
                     if aggressive:
-                        while sub_iter < 1000:
-                            sub_iter += 1
-                            print('Sub iter:', sub_iter)
-                            # print('sub_iter:', sub_iter)
+                        if aggressive_word:
+                            sub_iter = 0
+                            while sub_iter < 1000:
+                                #if opt == 'WORD':
+                                optimize_encoder = optimize_word
+                                #else:
+                                #    optimize_encoder = optimize_label
+                                # encoder updates
+                                sub_iter += 1
+                                print('Sub iter:', sub_iter)
+                                # print('sub_iter:', sub_iter)
 
-                            start_idx = sub_iter * params.batch_size
-                            end_idx = (sub_iter + 1) * params.batch_size
-                            indices = rand_ids[start_idx:end_idx]
+                                start_idx = sub_iter * params.batch_size
+                                end_idx = (sub_iter + 1) * params.batch_size
+                                indices = rand_ids[start_idx:end_idx]
 
-                            sent_batch = word_data[indices]
-                            label_batch = label_data[indices]
-                            sent_dec_l_batch = word_labels_arr[indices]
-                            sent_l_batch = encoder_word_data[indices]
-                            label_l_batch = label_labels_arr[indices]
-                            dec_word_inp_batch = decoder_words[indices]
-                            dec_label_inp_batch = decoder_labels[indices]
-                            ## burn_batch_size, burn_sents_len = sent_l_batch.shape
-                            ## TODO the burn_sents_len will be different for each idx?
-                            burn_batch_size = len(sent_l_batch)
-                            burn_sents_len = len(sent_l_batch[0])
+                                sent_batch = word_data[indices]
+                                label_batch = label_data[indices]
+                                sent_dec_l_batch = word_labels_arr[indices]
+                                sent_l_batch = encoder_word_data[indices]
+                                label_l_batch = label_labels_arr[indices]
+                                dec_word_inp_batch = decoder_words[indices]
+                                dec_label_inp_batch = decoder_labels[indices]
+                                ## burn_batch_size, burn_sents_len = sent_l_batch.shape
+                                ## TODO the burn_sents_len will be different for each idx?
+                                burn_batch_size = len(sent_l_batch)
+                                burn_sents_len = len(sent_l_batch[0])
 
-                            # not optimal!!
-                            length_ = np.array([len(sent) for sent in sent_batch
-                                                ]).reshape(params.batch_size)
+                                # not optimal!!
+                                length_ = np.array([len(sent) for sent in sent_batch
+                                                    ]).reshape(params.batch_size)
 
-                            # prepare encoder and decoder inputs to feed
-                            sent_batch = zero_pad(sent_batch, pad)
-                            label_batch = zero_pad(label_batch, pad)
-                            sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
-                            sent_l_batch = zero_pad(sent_l_batch, pad)
-                            label_l_batch = zero_pad(label_l_batch, pad)
-                            dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
-                            dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
+                                # prepare encoder and decoder inputs to feed
+                                sent_batch = zero_pad(sent_batch, pad)
+                                label_batch = zero_pad(label_batch, pad)
+                                sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
+                                sent_l_batch = zero_pad(sent_l_batch, pad)
+                                label_l_batch = zero_pad(label_l_batch, pad)
+                                dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                                dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
 
-                            feed = {
-                                word_inputs: sent_l_batch,
-                                label_inputs: label_l_batch,
-                                d_word_labels: sent_dec_l_batch,
-                                d_label_labels: label_l_batch,
-                                d_seq_length: length_,
-                                d_word_inputs: dec_word_inp_batch,
-                                d_label_inputs: dec_label_inp_batch,
-                                alpha: alpha_v,
-                                beta: beta_v
-                            }
+                                feed = {
+                                    word_inputs: sent_l_batch,
+                                    label_inputs: label_l_batch,
+                                    d_word_labels: sent_dec_l_batch,
+                                    d_label_labels: label_l_batch,
+                                    d_seq_length: length_,
+                                    d_word_inputs: dec_word_inp_batch,
+                                    d_label_inputs: dec_label_inp_batch,
+                                    alpha: alpha_v,
+                                    beta: beta_v
+                                }
 
-                            ## aggressively optimize encoder
-                            loss, _ = sess.run(
-                                [total_lower_bound, optimize_encoder],
-                                feed_dict=feed)
-
-                            if sub_iter % 15 == 0:
-                                ## TODO why -1?
-                                burn_num_words += (burn_sents_len -
-                                                    1) * burn_batch_size
+                                ## aggressively optimize encoder words
+                                loss = sess.run(
+                                    [total_lower_bound], feed_dict=feed)
                                 burn_cur_loss += loss
-                                burn_cur_loss = burn_cur_loss / burn_num_words
-                                ## stop encoder only updates
-                                ## do one full VAE update
-                            
-                                if burn_pre_loss < burn_cur_loss:
-                                    break
-                                burn_pre_loss = burn_cur_loss
-                                burn_cur_loss = burn_num_words = 0
+                                if sub_iter % no_batches == 0:
+                                    if (burn_pre_loss < burn_cur_loss):
+                                        break
+                                    burn_pre_loss = burn_cur_loss
+                                    burn_cur_loss = 0
+                                _ = sess.run([optimize_encoder], feed_dict=feed)
 
+                        if aggressive_label:
+                            sub_iter = 0
+                            while sub_iter < 1000:
+                                #if opt == 'WORD':
+                                optimize_encoder = optimize_label
+                                #else:
+                                #    optimize_encoder = optimize_label
+                                # encoder updates
+                                sub_iter += 1
+                                print('Sub iter:', sub_iter)
+                                # print('sub_iter:', sub_iter)
+
+                                start_idx = sub_iter * params.batch_size
+                                end_idx = (sub_iter + 1) * params.batch_size
+                                indices = rand_ids[start_idx:end_idx]
+
+                                sent_batch = word_data[indices]
+                                label_batch = label_data[indices]
+                                sent_dec_l_batch = word_labels_arr[indices]
+                                sent_l_batch = encoder_word_data[indices]
+                                label_l_batch = label_labels_arr[indices]
+                                dec_word_inp_batch = decoder_words[indices]
+                                dec_label_inp_batch = decoder_labels[indices]
+                                ## burn_batch_size, burn_sents_len = sent_l_batch.shape
+                                ## TODO the burn_sents_len will be different for each idx?
+                                burn_batch_size = len(sent_l_batch)
+                                burn_sents_len = len(sent_l_batch[0])
+
+                                # not optimal!!
+                                length_ = np.array([len(sent) for sent in sent_batch
+                                                    ]).reshape(params.batch_size)
+
+                                # prepare encoder and decoder inputs to feed
+                                sent_batch = zero_pad(sent_batch, pad)
+                                label_batch = zero_pad(label_batch, pad)
+                                sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
+                                sent_l_batch = zero_pad(sent_l_batch, pad)
+                                label_l_batch = zero_pad(label_l_batch, pad)
+                                dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                                dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
+
+                                feed = {
+                                    word_inputs: sent_l_batch,
+                                    label_inputs: label_l_batch,
+                                    d_word_labels: sent_dec_l_batch,
+                                    d_label_labels: label_l_batch,
+                                    d_seq_length: length_,
+                                    d_word_inputs: dec_word_inp_batch,
+                                    d_label_inputs: dec_label_inp_batch,
+                                    alpha: alpha_v,
+                                    beta: beta_v
+                                }
+
+                                ## aggressively optimize encoder words
+                                loss = sess.run(
+                                    [total_lower_bound], feed_dict=feed)
+                                burn_cur_loss += loss
+                                if sub_iter % no_batches == 0:
+                                    if (burn_pre_loss < burn_cur_loss):
+                                        break
+                                    burn_pre_loss = burn_cur_loss
+                                    burn_cur_loss = 0
+                                _ = sess.run([optimize_encoder], feed_dict=feed)
+
+
+                        
+                           
                         # Decoder update
                         start_idx = it * params.batch_size
                         end_idx = (it + 1) * params.batch_size
@@ -534,6 +598,7 @@ def main(params):
                         loss, _ = sess.run(
                             [total_lower_bound, optimize_decoder],
                             feed_dict=feed)
+
                     else:
                     ## standard VAE updates
 
@@ -624,35 +689,57 @@ def main(params):
                             ],
                             feed_dict=feed)
 
-                        mi_s = calc_mi_q(zs_dist[0], zs_dist[1], zs_samples)
-                        mi_g = calc_mi_q(zg_dist[0], zg_dist[1], zg_samples)
-                        mi_zc_zl = calc_mi_two(zs_dist[0], zs_dist[1], zg_dist[0], zg_dist[1], zg_sample, zs_sample)
-                        global_mi += mi_g * batch_size
+                        mi_s += calc_mi_q(zs_dist[0], zs_dist[1], zs_samples)
+                        mi_g += calc_mi_q(zg_dist[0], zg_dist[1], zg_samples)
+                        mi_zc_zl += calc_mi_two(zs_dist[0], zs_dist[1], zg_dist[0], zg_dist[1], zg_sample, zs_sample)
+                    
+                    #global_mi += mi_g * batch_size
 
-                    sent_mi /= num_examples
-                    global_mi /= num_examples
-                    cur_mi = sent_mi + global_mi
+                    #sent_mi /= num_examples
+                    #global_mi /= num_examples
+                    mi_s /= val_it
+                    mi_g /= val_it
+                    mi_zc_zl /= val_it
 
-                    smi.append(sent_mi)
-                    gmi.append(global_mi)
-                    tmi.append(cur_mi)
-                    # smi_ext.append(sent_mi)
-                    # gmi_ext.append(global_mi)
-                    # tmi_ext.append(cur_mi)
-                    # smi_ind.append(0)
-                    # gmi_ind.append(0)
-                    # tmi_ind.append(0)
+                    #cur_mi = sent_mi + global_mi
+
+                    #smi.append(sent_mi)
+                    #gmi.append(global_mi)
+                    #tmi.append(cur_mi)
+
+                    smi.append(mi_s)
+                    gmi.append(mi_g)
+                    tmi.append(mi_zc_zl)
+                    mi_g += mi_zc_zl
+       
                     write_lists_to_file('mi_values.txt', smi, gmi, tmi)
                     # write_lists_to_file('mi_ext_values.txt', smi_ext, gmi_ext, tmi_ext, smi_ind, gmi_ind, tmi_ind)
 
                     cur_it += 1
-                    if aggressive and cur_it%num_iters==0:
-                        print("pre mi:%.4f. cur mi:%.4f" %
-                                (pre_mi, cur_mi))
-                        if cur_mi < pre_mi:
-                            aggressive = False
-                            print("STOP BURNING")
-                        pre_mi = cur_mi
+                    
+                    if cur_it%num_iters==0:
+                        if aggressive :
+                            print("pre mi:%.4f. cur mi:%.4f" %(pre_mi, cur_mi))
+                            if mi_s < mi_s_prev and mi_g < mi_g_prev:
+                                aggressive = False
+                            elif mi_s < mi_s_prev :
+                                aggressive_word = False
+                                print("STOP BURNING word", cur_it)
+                            elif mi_g < mi_g_prev :
+                                aggressive_label = False
+                                print("STOP BURNING label", cur_it)
+                        else:
+                            if mi_s > mi_s_prev and mi_g > mi_g_prev:
+                                    aggressive = True
+                            elif mi_s > mi_s_prev :
+                                aggressive_word = True
+                                print("START BURNING word:", cur_it)
+                            elif mi_g > mi_g_prev :
+                                aggressive_label = True
+                                print("STOP BURNING word:", cur_it)
+                        mi_s_prev = mi_s
+                        mi_g_prev = mi_g
+                        #mi_s_prev = mi_s
 
 
                     if cur_it % 100 == 0 and cur_it != 0:
