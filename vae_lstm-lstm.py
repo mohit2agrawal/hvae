@@ -289,7 +289,7 @@ def main(params):
 
             schedule = scheduler(
                 params.fn, params.num_epochs * num_iters, params.cycles,
-                params.cycle_proportion, params.beta_lag
+                params.cycle_proportion, params.beta_lag, params.zero_start
             )
             word_data = np.array(word_data)
             label_data = np.array(label_data)

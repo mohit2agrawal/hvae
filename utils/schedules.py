@@ -1,39 +1,89 @@
 from numpy import pi, tanh, cos
 
-def scheduler(fn, max_iterations, cycles, cycle_proportion, beta_lag):
+
+def scheduler(
+    fn, max_iterations, cycles, cycle_proportion, beta_lag, zero_start
+):
     ## Time period of each cycle
-    T = max_iterations/cycles
+    T = max_iterations / cycles
+    # T = 5000
     ## reach max value (1) at
-    N = float(T)*cycle_proportion
+    N = float(T) * cycle_proportion
 
     ## lag beta by these many iterations
-    lag = float(T)*beta_lag
+    lag = float(T) * beta_lag
 
-    def linear(x):
-        return min(1, (x%T)/N)
+    def linear(x, t, n):
+        return min(1, (x % t) / n)
 
-    def cosine(x):
-        if x%T > N:
+    def cosine(x, t, n):
+        if x % t > n:
             return 1
-        return 0.5*(1-cos((pi*(x%T))/N))
+        return 0.5 * (1 - cos((pi * (x % t)) / n))
 
-    def tan_h(x):
-        if x%T > N:
+    def tan_h(x, t, n):
+        if x % t > n:
             return 1
-        return 0.5*(1+tanh((x%T-N/2)/(N/6.5)))
+        return 0.5 * (1 + tanh((x % t - n / 2) / (n / 6.5)))
 
-    _alpha_val = {'linear': linear,
-                  'cosine': cosine,
-                  'tanh'  : tan_h}.get(fn, 'linear')
+    _alpha_val = {
+        'linear': linear,
+        'cosine': cosine,
+        'tanh': tan_h
+    }.get(fn, 'linear')
 
+    r = zero_start
+
+    ## simple schedule without zero start
     def schedule(x):
-        alpha = _alpha_val(x)
+        alpha = _alpha_val(x, T, N)
         beta = alpha
-        if lag!=0:
-            if x<lag:
+        if lag != 0:
+            if x < lag:
                 return alpha, 0
-            beta = _alpha_val(x-lag)
+            beta = _alpha_val(x - lag, T, N)
         return alpha, beta
+
+    # return schedule
+
+    # def schedule(x):
+    #     if x % T < 700:
+    #         return 0, 0
+    #     x -= 700
+    #     alpha = tan_h(x, T, N)
+    #     beta = alpha
+    #     if lag != 0:
+    #         if x % T < lag:
+    #             return alpha, 0
+    #         beta = tan_h(x - lag, T, N)
+    #     return alpha, beta
+
+    ## schedule with zero start
+    # def schedule(x):
+    #     x = float(x)
+    #     # r = 0
+    #     # r = 0.75
+    #     alpha_x = x % T
+    #     if alpha_x / T < r:
+    #         alpha = 0
+    #         return 0, 0
+    #     else:
+    #         alpha_x -= r * T
+    #         alpha = _alpha_val(alpha_x, T * (1 - r), N * (1 - r))
+    #     beta = alpha
+    #     if lag != 0:
+    #         ## for initial zero
+    #         if x % T < lag:
+    #             return alpha, 0
+    #         x -= lag
+    #         x %= T
+    #         if x / T < r:
+    #             return alpha, 0
+    #         x -= r * T
+    #         # beta = _alpha_val(x, T * (1 - r) - lag, N * (1 - r))
+    #         ## to reach 1 along with alpha
+    #         beta = _alpha_val(x, T * (1 - r) - lag, N * (1 - r) - lag)
+    #     return alpha, beta
 
     return schedule
 
@@ -44,7 +94,7 @@ def test():
     mpl.use("Agg")
     import matplotlib.pyplot as plt
 
-    n = 40000
+    n = 20000
     # sch = scheduler('cosine', n, 3, 0.75, 0)
     # cos = [sch(i)[0] for i in range(n)]
     # sch = scheduler('tanh', n, 3, 0.75, 0)
@@ -52,12 +102,11 @@ def test():
     # plt.plot(cos, color="blue", label="cos")
     # plt.plot(tan, color="red", label="tan")
 
-
-    sch = scheduler('tanh', n, 3, 0.75, 0.1)
+    sch = scheduler('tanh', n, 5, 1, 0.15, 0)
     alpha = []
     beta = []
     for i in range(n):
-        a,b = sch(i)
+        a, b = sch(i)
         alpha.append(a)
         beta.append(b)
 
@@ -65,7 +114,6 @@ def test():
     plt.plot(beta, color="red", label="beta")
     plt.legend()
     plt.savefig('./schedule_test.png')
-
 
 
 if __name__ == '__main__':

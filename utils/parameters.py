@@ -15,11 +15,11 @@ class Parameters():
     anneal_value = 1
     debug = True
     # name = "rVACS_kl"
-    name = "ptb_pos"
+    name = "ptb_pos_short"
     num_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 10
-    num_epochs = 10
+    num_epochs = 15
     learning_rate = 0.0001
     batch_size = 32
     # for decoding
@@ -144,6 +144,12 @@ class Parameters():
             type=float,
             help="proportion of cycle beta lags behind alpha"
         )
+        parser.add_argument(
+            '--zero_start',
+            default=0,
+            type=float_limited,
+            help="proportion of cycle used to increase alpha and beta"
+        )
 
         parser.add_argument(
             '--ckpt_path',
@@ -174,6 +180,7 @@ class Parameters():
         self.cycle_proportion = args.cycle_proportion
         self.fn = args.fn
         self.beta_lag = args.beta_lag
+        self.zero_start = args.zero_start
 
         self.ckpt_path = args.ckpt_path
         self.num_samples = args.num_samples
