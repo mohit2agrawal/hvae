@@ -18,7 +18,7 @@
 
 - options
 
-  `python vae_lstm-lstm.py --fn tanh --cycles 5 --cycle_proportion 0.5 --beta_lag 0.1`
+  `python vae_lstm-lstm.py --fn tanh --cycles 5 --cycle_proportion 0.5 --beta_lag 0.1 --zero_start 0.75`
   - --fn (scheduling function)
     - linear (default)
     - tanh
@@ -31,6 +31,7 @@
     - 0 (default) implies no lag, hence alpha = beta
     - 0.1 would imply that beta would lag behind alpha by 0.1*cycle
     - beta would be zero for the lagged proportion of first cycle
+  - --zero_start (proportion of the time period for which the cycle remains at zero)
 
 - sampling
   by default, both 'biased sampling' and 'no word repetition' are used.
