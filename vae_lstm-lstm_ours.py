@@ -330,8 +330,8 @@ def main(params):
         gradients_word = tf.gradients(total_lower_bound, encoder_word_vars,
                                          name='gradients_encoder_word')
         clipped_grad_word, _ = tf.clip_by_global_norm(
-            gradients_encoder, 5, name='clipped_encoder_word')
-        optimize_encoder_word = opt.apply_gradients(
+            gradients_word, 5, name='clipped_encoder_word')
+        optimize_word = opt.apply_gradients(
             zip(clipped_grad_word, encoder_word_vars))
 
 
@@ -340,8 +340,8 @@ def main(params):
         gradients_label = tf.gradients(total_lower_bound, encoder_label_vars,
                                          name='gradients_encoder_word')
         clipped_grad_label, _ = tf.clip_by_global_norm(
-            gradients_encoder, 5, name='clipped_encoder_word')
-        optimize_encoder_label = opt.apply_gradients(
+            gradients_label, 5, name='clipped_encoder_word')
+        optimize_label = opt.apply_gradients(
             zip(clipped_grad_label, encoder_label_vars))
 
 
@@ -409,11 +409,14 @@ def main(params):
             decoder_labels = np.array(decoder_labels)
             sub_iter = 0  ## for aggressive encoder optim
             aggressive = True
+            aggressive_word = True
+            aggressive_label = True
             pre_mi = 0
-
+	    mi_s_prev = 0
+	    mi_g_prev = 0
             # zero padding
             pad = max_sent_len
-            no_batches = 
+            #no_batches = params.batch_size
             alpha_v = beta_v = 1
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
@@ -430,7 +433,7 @@ def main(params):
                     if aggressive:
                         if aggressive_word:
                             sub_iter = 0
-                            while sub_iter < 1000:
+                            while sub_iter < 311:
                                 #if opt == 'WORD':
                                 optimize_encoder = optimize_word
                                 #else:
@@ -456,7 +459,7 @@ def main(params):
                                 burn_batch_size = len(sent_l_batch)
                                 burn_sents_len = len(sent_l_batch[0])
 
-                                # not optimal!!
+                                # not optimal !!
                                 length_ = np.array([len(sent) for sent in sent_batch
                                                     ]).reshape(params.batch_size)
 
@@ -482,10 +485,12 @@ def main(params):
                                 }
 
                                 ## aggressively optimize encoder words
+                                
                                 loss = sess.run(
-                                    [total_lower_bound], feed_dict=feed)
+                                    total_lower_bound, feed_dict=feed)
+                                print("Debug total_lower_bound", loss)
                                 burn_cur_loss += loss
-                                if sub_iter % no_batches == 0:
+                                if sub_iter % 15 == 0:
                                     if (burn_pre_loss < burn_cur_loss):
                                         break
                                     burn_pre_loss = burn_cur_loss
@@ -494,7 +499,7 @@ def main(params):
 
                         if aggressive_label:
                             sub_iter = 0
-                            while sub_iter < 1000:
+                            while sub_iter < 311:
                                 #if opt == 'WORD':
                                 optimize_encoder = optimize_label
                                 #else:
@@ -547,9 +552,9 @@ def main(params):
 
                                 ## aggressively optimize encoder words
                                 loss = sess.run(
-                                    [total_lower_bound], feed_dict=feed)
+                                    total_lower_bound, feed_dict=feed)
                                 burn_cur_loss += loss
-                                if sub_iter % no_batches == 0:
+                                if sub_iter % num_iters == 0:
                                     if (burn_pre_loss < burn_cur_loss):
                                         break
                                     burn_pre_loss = burn_cur_loss
@@ -659,9 +664,11 @@ def main(params):
                                         all_klzg, all_klzs)
 
                     ## for MI
-                    sent_mi = 0
-                    global_mi = 0
-                    num_examples = 0
+                    #sent_mi = 0
+                    #global_mi = 0
+                    #num_examples = 0
+		    mi_s = 0
+		    mi_g = 0
 
                     ## weighted average on calc_mi_q
                     val_len = len(encoder_val_data)

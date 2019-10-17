@@ -421,7 +421,7 @@ def main(params):
 
                             ## aggressively optimize encoder
                             loss, _ = sess.run(
-                                [total_lower_bound, optimize_encoder],
+                                total_lower_bound, optimize_encoder,
                                 feed_dict=feed)
 
                             if sub_iter % 15 == 0:
