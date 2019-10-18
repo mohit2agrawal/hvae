@@ -63,50 +63,66 @@
   - generated_labels.txt
   - generated_sentences.txt
 
-  - if not sampling using the latest sampling code, use `clip_by_eos.py` to get the sentences and labels before the {EOS} tag.
+  If not sampling using the latest sampling code, use `python clip_by_eos.py <sent/label file>` to get the sentences and labels before the {EOS} tag.
 
 ## Utilities
 ### utils/pos
 - tag.py
+
   `python tag.py sentenes.txt labels.txt`
   - Input: sentences.txt
   - Output: labels.txt, the POS tags for sentences.txt
 
 - accuracy.py
+
   `python accuracy.py sentences.txt labels.txt test_sents.txt test_labels.txt`
   Train a CRF model to do POS tagging learnt from `sentences.txt` and `labels.txt`
   Then, report accuracy and other metrics on `test_sents.txt` and `test_labels.txt`
+  
+  **requires sklearn_crfsuite:**
+  `pip install sklearn-crfsuite`
 
 ### utils/ner
 - accuracy.py
+
   `python accuracy.py labels.txt true_labels.txt`
-  Input: labels.txt and true_labels.txt
-  Output: accuracy score
+  - Input: labels.txt and true_labels.txt
+  - Output: accuracy score
+  
   Get the accuracy score considering `true_labels.txt` as the true value.
 
 - tag.py
+
   `python tag.py sentences.txt labels.txt <model.ser.gz>`
-  Input: sentences.txt
-  Output: labels.txt, the NER tags for sentences.txt
+  - Input: sentences.txt
+  - Output: labels.txt, the NER tags for sentences.txt
+  
   Find NER tags using the Stanford model.
   Provide an optional `model.ser.gz` to be used.
+  
   NOTE: verify the path to `stanford-ner` in the code
 
 - to_tsv.py
+
   `python to_tsv.py sentences.txt labels.txt output.tsv`
-  Input: sentences.txt and labels.txt
-  Output: output.tsv
+  - Input: sentences.txt and labels.txt
+  - Output: output.tsv
+  
   Convert the `sentences.txt` and `labels.txt` to a single `output.tsv` to be used for training a stanford NER model
 
 - transform.py
+
   `python transform.py labels_ner.txt labels_numeric.txt`
-  Input: labels_ner.txt, the labels file with NER word tags like 'PERSON', 'LOCATION'
-  Output: labels_numeric.txt, the labels file with numeric labels (0,1,2,3)
+  - Input: labels_ner.txt, the labels file with NER word tags like 'PERSON', 'LOCATION'
+  - Output: labels_numeric.txt, the labels file with numeric labels (0,1,2,3)
+  
   Convert NER word labels to numeric labels according to
   'O': '0', 'LOCATION': '1', 'PERSON': '2', 'ORGANIZATION': '3'
+  
   NOTE: This may not be required if using the latest `data.py` and latest `sampling.py`
 
 - verify_lengths.py
+
   `python verify_lengths.py data.txt labels.txt`
   verifies if every word has a label
   checks if the length of list after splitting by <space> is equal for both files per line
@@ -118,20 +134,23 @@
     - serializeTo = ner-sample.ser.gz (output model path)
 
   - Run following to train
-  ```java -cp stanford-ner.jar edu.stanford.nlp.ie.crf.CRFClassifier \
+  ```bash
+  java -cp stanford-ner.jar edu.stanford.nlp.ie.crf.CRFClassifier \
     -prop train.prop
   ```
 
   - We may optionally use the following command
     (not tested, might have to remove trainFile nad serializeTo from the .prop file)
-  ```java -cp stanford-ner.jar edu.stanford.nlp.ie.crf.CRFClassifier \
+  ```bash
+  java -cp stanford-ner.jar edu.stanford.nlp.ie.crf.CRFClassifier \
     -trainFile train.tsv \
     -serializeTo ner-model.ser.gz \
     -prop train.prop
   ```
 
   For testing the model,
-  ```java -cp stanford-ner.jar edu.stanford.nlp.ie.crf.CRFClassifier \
+  ```bash
+  java -cp stanford-ner.jar edu.stanford.nlp.ie.crf.CRFClassifier \
   -loadClassifier ner-model.ser.gz \
   -testFile text.tsv
   ```
