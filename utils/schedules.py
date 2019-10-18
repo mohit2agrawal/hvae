@@ -32,8 +32,6 @@ def scheduler(
         'tanh': tan_h
     }.get(fn, 'linear')
 
-    r = zero_start
-
     ## simple schedule without zero start
     def schedule(x):
         alpha = _alpha_val(x, T, N)
@@ -58,33 +56,37 @@ def scheduler(
     #         beta = tan_h(x - lag, T, N)
     #     return alpha, beta
 
-    ## schedule with zero start
-    # def schedule(x):
-    #     x = float(x)
-    #     # r = 0
-    #     # r = 0.75
-    #     alpha_x = x % T
-    #     if alpha_x / T < r:
-    #         alpha = 0
-    #         return 0, 0
-    #     else:
-    #         alpha_x -= r * T
-    #         alpha = _alpha_val(alpha_x, T * (1 - r), N * (1 - r))
-    #     beta = alpha
-    #     if lag != 0:
-    #         ## for initial zero
-    #         if x % T < lag:
-    #             return alpha, 0
-    #         x -= lag
-    #         x %= T
-    #         if x / T < r:
-    #             return alpha, 0
-    #         x -= r * T
-    #         # beta = _alpha_val(x, T * (1 - r) - lag, N * (1 - r))
-    #         ## to reach 1 along with alpha
-    #         beta = _alpha_val(x, T * (1 - r) - lag, N * (1 - r) - lag)
-    #     return alpha, beta
+    r = zero_start
 
+    ## schedule with zero start
+    def schedule_zs(x):
+        x = float(x)
+        # r = 0
+        # r = 0.75
+        alpha_x = x % T
+        if alpha_x / T < r:
+            alpha = 0
+            return 0, 0
+        else:
+            alpha_x -= r * T
+            alpha = _alpha_val(alpha_x, T * (1 - r), N * (1 - r))
+        beta = alpha
+        if lag != 0:
+            ## for initial zero
+            if x % T < lag:
+                return alpha, 0
+            x -= lag
+            x %= T
+            if x / T < r:
+                return alpha, 0
+            x -= r * T
+            # beta = _alpha_val(x, T * (1 - r) - lag, N * (1 - r))
+            ## to reach 1 along with alpha
+            beta = _alpha_val(x, T * (1 - r) - lag, N * (1 - r) - lag)
+        return alpha, beta
+
+    if zero_start:
+        return schedule_zs
     return schedule
 
 
