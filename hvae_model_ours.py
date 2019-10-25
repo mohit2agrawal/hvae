@@ -501,7 +501,8 @@ def decoder_model(
         label_logits = label_dense_layer(label_cell_output)
         label_logits_softmax = tf.nn.softmax(label_logits)
 
-        label_logits_arr.append(label_logits)
+        label_logits_arr.append(label_logits_softmax)
+        #label_logits_arr.append(label_logits)
         label_state_arr.append(label_cell_state)
 
         ## concat zc and label logits and run the word decoder LSTM

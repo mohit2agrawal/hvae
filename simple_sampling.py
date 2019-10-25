@@ -55,7 +55,8 @@ def softmax(x):
         return np.exp(x) / np.sum(np.exp(x))
     return np.exp(x) / np.sum(np.exp(x), axis=1, keepdims=True)
 
-
+def normalise(x):
+    return x / np.sum(x)
 
 def main(params):
     # data_folder = './DATA/parallel_data_10k/'
@@ -267,6 +268,7 @@ def main(params):
                         ## logit for <BOS> should be zero
                         l_logit[label_bos_index] = 0
                         l_logit[label_pad_index] = 0
+                        #print("Debug l_logit", label_bos_index, l_logit[label_bos_index])
                         if sent_len == 0:
                             l_logit[label_eos_index] = 0
 
@@ -281,12 +283,17 @@ def main(params):
                             start_softmax = softmax(start_logit)
 
                         ## calc softmax
-                        l_softmax = softmax(l_logit)
+                        l_softmax =  normalise(l_logit)
+                        #softmax(l_logit)
+
 
                         ## biased sampling (contd...)
                         if biased_sampling and sent_len == 0:
                             l_softmax[:] = 0
                             l_softmax[start_label_idxs] = start_softmax
+                        #print("Debug sent_len", l_logit)
+                        print("Debug l_logit", l_logit)
+                        print("Debug l_softmax", l_softmax)
 
                         pred_label_idx = np.random.choice(
                             label_vocab_size, size=1, p=l_softmax
