@@ -1,7 +1,9 @@
 import sys
 import os
 
-filename = "test_plot.txt"
+filename = "test_plot2.txt"
+#filename = "test_plot_old.txt"
+#filename = "test_plot.txt"
 if len(sys.argv) > 1:
     filename = sys.argv[1]
 out_graph_name = filename.replace(".txt", ".png")

@@ -1,7 +1,7 @@
 import sys
 import os
 
-filename = "mi_values.txt"
+filename = "mi_values_old1.txt"
 if len(sys.argv) > 1:
     filename = sys.argv[1]
 out_graph_name = filename.replace(".txt", ".png")

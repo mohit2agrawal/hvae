@@ -491,9 +491,7 @@ def main(params):
             decoder_words = np.array(decoder_words)
             decoder_labels = np.array(decoder_labels)
             sub_iter = 0  ## for aggressive encoder optim
-            aggressive = True
-            aggressive_word = True
-            aggressive_label = True
+            
             pre_mi = 0
             mi_s_prev = 0
             mi_g_prev = 0
@@ -501,12 +499,20 @@ def main(params):
             pad = max_sent_len
             #no_batches = params.batch_size
             alpha_v = beta_v = 1
-            for e in range(params.num_epochs):
-                epoch_start_time = datetime.datetime.now()
-                params.is_training = True
-                print("Epoch: {} started at: {}".format(e, epoch_start_time))
-                print('aggressive:', aggressive)
-                for it in tqdm(range(num_iters)):
+            it = 0
+            aggressive = True
+            aggressive_word = True
+            aggressive_label = True
+            
+            for e in tqdm(range(params.num_epochs)):
+                    epoch_start_time = datetime.datetime.now()
+                    params.is_training = True
+                    
+                    print("Epoch: {} started at: {}".format(e, epoch_start_time))
+                    
+                    #for it in tqdm(range(num_iters)):
+                    
+                    print("it", it, 'aggressive:', aggressive,  'aggressive_word:', aggressive_word,  'aggressive_label:', aggressive_label)
                     sub_iter = 0
                     burn_num_words = 0
                     #burn_pre_loss = 1e4
@@ -520,13 +526,15 @@ def main(params):
                             sub_iter = 0
                             burn_cur_loss = 0
                             burn_pre_loss = 1e4
-                            while sub_iter < 311:
+                            #while sub_iter < 311:
+                            while(1):
                                 #if opt == 'WORD':
-                                optimize_encoder = optimize_word
+                                #optimize_encoder = optimize_word
                                 #else:
                                 #    optimize_encoder = optimize_label
                                 # encoder updates
                                 sub_iter += 1
+                                sub_iter %= 311
                                 print('Sub iter word:', sub_iter)
                                 # print('sub_iter:', sub_iter)
 
@@ -575,29 +583,31 @@ def main(params):
                                 loss, rec, kl = sess.run([total_lower_bound, rec_loss, kl_term_weight], feed_dict=feed)
                                 print("Debug total_lower_bound word:", loss, "rec:", rec, "kl:", kl)
                                 burn_cur_loss += loss
-                                if sub_iter % 15 == 0: 
-                                    sent_count = sub_iter
+                                if sub_iter % 311 == 0: 
+                                    #sent_count = sub_iter
                                     # * burn_batch_size
-                                    burn_cur_loss /= sent_count
+                                    burn_cur_loss /= 311
                                     print("Word Burn pre loss:", burn_pre_loss, "Burn cur loss:",burn_cur_loss)
                                     if (burn_pre_loss < burn_cur_loss):
                                         print("Break condition true")
                                         break
                                     burn_pre_loss = burn_cur_loss
                                     burn_cur_loss = 0
-                                _ = sess.run([optimize_encoder], feed_dict=feed)
+                                _ = sess.run([optimize_word], feed_dict=feed)
 
-                        if aggressive_label:
+                        if aggressive_word == False and aggressive_label:
                             sub_iter = 0
                             burn_pre_loss = 1e4
                             burn_cur_loss = 0
-                            while sub_iter < 311:
+                            #while sub_iter < 311:
+                            while(1):
                                 #if opt == 'WORD':
-                                optimize_encoder = optimize_label
+                                #optimize_encoder = optimize_label
                                 #else:
                                 #    optimize_encoder = optimize_label
                                 # encoder updates
                                 sub_iter += 1
+                                sub_iter %= 311
                                 print('Sub iter label:', sub_iter)
                                 # print('sub_iter:', sub_iter)
 
@@ -649,20 +659,19 @@ def main(params):
                                 #    total_lower_bound, feed_dict=feed)
                                 loss, rec, kl = sess.run([total_lower_bound, rec_loss, kl_term_weight], feed_dict=feed)
                                 print("Debug total_lower_bound label:", loss,  "rec:", rec, "kl:", kl) 
-                                burn_cur_loss = loss
-                                if sub_iter % 15 == 0:
-                                    sent_count = sub_iter
-                                    burn_cur_loss /= sent_count
+                                burn_cur_loss += loss
+                                if sub_iter % 311 == 0:
+                                    #sent_count = sub_iter
+                                    burn_cur_loss /= 311
                                     print("Label Burn pre loss:", burn_pre_loss, "Burn cur loss:",burn_cur_loss)
                                     if (burn_pre_loss < burn_cur_loss):
                                         print("Break condition true")
                                         break
                                     burn_pre_loss = burn_cur_loss
                                     burn_cur_loss = 0
-                                _ = sess.run([optimize_encoder], feed_dict=feed)
+                                _ = sess.run([optimize_label], feed_dict=feed)
 
 
-                        
                            
                         # Decoder update
                         start_idx = it * params.batch_size
@@ -709,7 +718,7 @@ def main(params):
 
                         start_idx = it * params.batch_size
                         end_idx = (it + 1) * params.batch_size
-
+                        #it+=1
                         sent_batch = word_data[start_idx:end_idx]
                         label_batch = label_data[start_idx:end_idx]
                         sent_dec_l_batch = word_labels_arr[start_idx:end_idx]
@@ -752,14 +761,59 @@ def main(params):
                                 kl_term_weight, optimize, alpha, beta
                             ],
                             feed_dict=feed)
+                    start_idx = it * params.batch_size
+                    end_idx = (it + 1) * params.batch_size
+                    #it+=1
+                    sent_batch = word_data[start_idx:end_idx]
+                    label_batch = label_data[start_idx:end_idx]
+                    sent_dec_l_batch = word_labels_arr[start_idx:end_idx]
+                    sent_l_batch = encoder_word_data[start_idx:end_idx]
+                    label_l_batch = label_labels_arr[start_idx:end_idx]
+                    dec_word_inp_batch = decoder_words[indices]
+                    dec_label_inp_batch = decoder_labels[indices]
 
-                        all_alpha.append(alpha_v)
-                        all_beta.append(beta_v)
-                        all_tlb.append(tlb)
-                        all_kl.append(klw)
-                        all_klzg.append(-kzg)
-                        all_klzs.append(-kzs)
-                        write_lists_to_file('test_plot.txt', all_alpha,
+                    # not optimal!!
+                    length_ = np.array([len(sent) for sent in sent_batch
+                                            ]).reshape(params.batch_size)
+
+                    sent_batch = zero_pad(sent_batch, pad)
+                    label_batch = zero_pad(label_batch, pad)
+                    sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
+                    sent_l_batch = zero_pad(sent_l_batch, pad)
+                    label_l_batch = zero_pad(label_l_batch, pad)
+                    dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                    dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
+                        
+                    feed = {
+                            word_inputs: sent_l_batch,
+                            label_inputs: label_l_batch,
+                            d_word_labels: sent_dec_l_batch,
+                            d_label_labels: label_l_batch,
+                            d_seq_length: length_,
+                            d_word_inputs: dec_word_inp_batch,
+                            d_label_inputs: dec_label_inp_batch,
+                            alpha: alpha_v,
+                            beta: beta_v
+                        }
+                    z1a,z1b, z3a, z3b, kzg, kzs, tlb, klw, alpha_, beta_, rec = sess.run(
+                            [
+                                Zsent_distribution[0], Zsent_distribution[1],
+                                Zsent_dec_distribution[0],
+                                Zsent_dec_distribution[1], neg_kld_zglobal,
+                                neg_kld_zsent, total_lower_bound,
+                                kl_term_weight, alpha, beta, rec_loss
+                            ],
+                            feed_dict=feed)
+
+                    all_alpha.append(alpha_v)
+                    all_beta.append(beta_v)
+                    all_tlb.append(tlb)
+                    all_kl.append(klw)
+                    all_klzg.append(-kzg)
+                    all_klzs.append(-kzs)
+                    print("TLB:", tlb)
+                    print("Debug total_lower_bound:", tlb, "rec:", rec, "kl:", klw)
+                    write_lists_to_file('test_plot_pos2.txt', all_alpha,
                                         all_beta, all_tlb, all_kl,
                                         all_klzg, all_klzs)
 
@@ -767,6 +821,8 @@ def main(params):
                     #sent_mi = 0
                     #global_mi = 0
                     cur_it += 1
+                    it += 1
+                    it %= 311
                     if cur_it % 1 == 0 :
                         num_examples = 0
                         mi_s = 0
@@ -801,7 +857,7 @@ def main(params):
 
                             mi_s += calc_mi_q(zs_dist[0], zs_dist[1], zs_sample)
                             mi_g += calc_mi_q(zg_dist[0], zg_dist[1], zg_sample)
-                            mi_zc_zl += calc_mi_two(zs_dist[0], zs_dist[1], zg_dist[0], zg_dist[1], zg_sample, zs_sample)
+                            mi_zc_zl += calc_mi_two(zs_dist[0], zs_dist[1], zg_dist[0], zg_dist[1], zs_sample, zg_sample)
                         
                         #global_mi += mi_g * batch_size
 
@@ -822,7 +878,7 @@ def main(params):
                         tmi.append(mi_zc_zl)
                         mi_g += mi_zc_zl
            
-                        write_lists_to_file('mi_values.txt', smi, gmi, tmi)
+                        write_lists_to_file('mi_values_pos2.txt', smi, gmi, tmi)
                     # write_lists_to_file('mi_ext_values.txt', smi_ext, gmi_ext, tmi_ext, smi_ind, gmi_ind, tmi_ind)
 
                     
@@ -832,21 +888,40 @@ def main(params):
                         if aggressive :
                             if mi_s < mi_s_prev and mi_g < mi_g_prev:
                                 aggressive = False
-                            elif mi_s < mi_s_prev :
+                            if mi_s < mi_s_prev :
                                 aggressive_word = False
                                 print("STOP BURNING word", cur_it)
-                            elif mi_g < mi_g_prev :
+                            else:
+                                aggressive_word = True
+                                #ggressive_word = True
+                            if mi_g < mi_g_prev :
                                 aggressive_label = False
                                 print("STOP BURNING label", cur_it)
+                            else:
+                                aggressive_label = True
+                        #'''
                         else:
-                            if mi_s > mi_s_prev and mi_g > mi_g_prev:
+                            if cur_it % 100:
+                                aggressive = True
+                                aggressive_word = True
+                                aggressive_label = True
+                            if mi_s > mi_s_prev :
+                                aggressive = True
+                                aggressive_word = True
+                            if mi_g > mi_g_prev :
+                                aggressive_label = True
+
+                            '''
+                            if mi_s > mi_s_prev or mi_g > mi_g_prev:
                                     aggressive = True
-                            elif mi_s > mi_s_prev :
+                            if mi_s > mi_s_prev :
                                 aggressive_word = True
                                 print("START BURNING word:", cur_it)
-                            elif mi_g > mi_g_prev :
+                            if mi_g > mi_g_prev :
                                 aggressive_label = True
                                 print("STOP BURNING word:", cur_it)
+                            '''
+                        #'''
                         mi_s_prev = mi_s
                         mi_g_prev = mi_g
                         #mi_s_prev = mi_s

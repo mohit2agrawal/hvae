@@ -19,7 +19,7 @@ class Parameters():
     num_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 10
-    num_epochs = 10
+    num_epochs = 10000
     learning_rate = 0.0001
     batch_size = 32
     # for decoding
@@ -33,8 +33,8 @@ class Parameters():
     encoder_hidden = 32  # std=191, inputless_dec=350
     encode = 'hw'  # 'hw' or 'mlp'
     # highway networks
-    keep_rate = 1.0  # --------------------------------------------------->
-    highway_lc = 1  # ------------------------------------------------->
+    keep_rate = 1.0      # --------------------------------------------------->
+    highway_lc = 1       # --------------------------------------------------->
     highway_ls = 600
     # decoder
     decoder_hidden = 32  # ----------------------------------------------------->modify param
@@ -54,8 +54,8 @@ class Parameters():
     fine_tune_embed = False
     # technical parameters
     is_training = True
-    LOG_DIR = './model_logs_' + name + "/"
-    MODEL_DIR = './models_ckpts_' + name + "/"
+    LOG_DIR = './model_logs_' + name + "_sample_periodic/"
+    MODEL_DIR = './models_ckpts_' + name + "_sample_periodic/"
     visualise = False
     # gru base cell partially implemented
     base_cell = 'lstm'  # or GRU

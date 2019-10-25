@@ -444,10 +444,9 @@ def decoder_model(
     max_sent_len,
     word_embed,
     label_embed,
-    class_vocab_sizes=None,
-    label_bos_idx=None,
-    word_bos_idx=None,
     gen_mode=False,
+    label_cell_state=None,
+    word_cell_state=None,
 ):
     ## the two LSTM cells
     label_cell = tf.contrib.rnn.LSTMCell(
@@ -457,9 +456,11 @@ def decoder_model(
         params.decoder_hidden, dtype=tf.float64, state_is_tuple=False
     )
 
+    ## will be batch_size x sentences for training
+    ## will be single word for gen_mode
+    word_input = tf.nn.embedding_lookup(word_embed, word_input)
+    label_input = tf.nn.embedding_lookup(label_embed, label_input)
     if not gen_mode:
-        word_input = tf.nn.embedding_lookup(word_embed, word_input)
-        label_input = tf.nn.embedding_lookup(label_embed, label_input)
         ## 'time' major tensors
         word_input_t = tf.transpose(word_input, [1, 0, 2])
         label_input_t = tf.transpose(label_input, [1, 0, 2])
@@ -469,31 +470,16 @@ def decoder_model(
     word_dense_layer = tf.layers.Dense(word_vocab_size, activation=None)
 
     ## zero initial state
-    label_cell_state = rnn_placeholders(
-        label_cell.zero_state(batch_size, tf.float64)
-    )
-    word_cell_state = rnn_placeholders(
-        word_cell.zero_state(batch_size, tf.float64)
-    )
+    if label_cell_state is None:
+        label_cell_state = label_cell.zero_state(batch_size, tf.float64)
+
+    if word_cell_state is None:
+        word_cell_state = word_cell.zero_state(batch_size, tf.float64)
 
     word_logits_arr = []
     label_logits_arr = []
     word_state_arr = []
     label_state_arr = []
-
-    if gen_mode:
-        pred_label_indices = []
-        pred_word_indices = []
-        to_add = [0]
-        s = 0
-        for x in class_vocab_sizes:
-            s += x
-            to_add.append(s)
-
-        pred_label_embedding = tf.nn.embedding_lookup(
-            label_embed, [label_bos_idx]
-        )
-        pred_word_embedding = tf.nn.embedding_lookup(word_embed, [word_bos_idx])
 
     ## compute the LSTM outputs
     for i in range(max_sent_len):
@@ -502,7 +488,7 @@ def decoder_model(
         ##     takes word_cell_state from prev iter
         # label_embedding = tf.nn.embedding_lookup(label_embed, pred_label)
         if gen_mode:
-            label_embedding_input = pred_label_embedding
+            label_embedding_input = label_input
         else:
             label_embedding_input = label_input_t[i]
         label_cell_input = tf.concat(
@@ -515,22 +501,13 @@ def decoder_model(
         label_logits = label_dense_layer(label_cell_output)
         label_logits_softmax = tf.nn.softmax(label_logits)
 
-        if gen_mode:
-            ## sample 1 label from softmax values
-            pred_label_idx = tf.random.categorical(label_logits_softmax,
-                                                   1)[0][0]
-            pred_label_indices.append(pred_label_idx)
-            pred_label_embedding = tf.nn.embedding_lookup(
-                label_embed, [pred_label_idx]
-            )
-
         label_logits_arr.append(label_logits)
         label_state_arr.append(label_cell_state)
 
         ## concat zc and label logits and run the word decoder LSTM
         # word_embedding = tf.nn.embedding_lookup(word_embed, pred_word)
         if gen_mode:
-            word_embedding_input = pred_word_embedding
+            word_embedding_input = word_input
         else:
             word_embedding_input = word_input_t[i]
         word_cell_input = tf.concat(
@@ -542,21 +519,7 @@ def decoder_model(
 
         ## get word logits
         word_logits = word_dense_layer(word_cell_output)
-        word_logits_softmax = tf.nn.softmax(word_logits)
-
-        if gen_mode:
-            ## sample 1 word from softmax values
-            class_size = tf.gather(class_vocab_sizes, pred_label_idx)
-            pred_word_idx = tf.random.categorical(
-                tf.slice(word_logits_softmax,[0,0],[1,class_size]), 1
-            )[0][0]
-            pred_word_idx += tf.cast(
-                tf.gather(to_add, pred_label_idx), tf.int64
-            )
-            pred_word_indices.append(pred_word_idx)
-            pred_word_embedding = tf.nn.embedding_lookup(
-                word_embed, [pred_word_idx]
-            )
+        # word_logits_softmax = tf.nn.softmax(word_logits)
 
         word_logits_arr.append(word_logits)
         word_state_arr.append(word_cell_state)
@@ -576,8 +539,6 @@ def decoder_model(
             label_logits_all / params.temperature, 10
         )[0]
 
-    if gen_mode:
-        return word_logits_all, label_logits_all, word_sample, label_sample, word_state_all, label_state_all, pred_label_indices, pred_word_indices
     return word_logits_all, label_logits_all, word_sample, label_sample, word_state_all, label_state_all
 
 
@@ -591,16 +552,34 @@ def decoder(
     max_sent_len,
     word_embed,
     label_embed,
-    class_vocab_sizes=None,
-    label_bos_idx=None,
-    word_bos_idx=None,
     gen_mode=False,
+    label_cell_state=None,
+    word_cell_state=None,
+    zsent_dec_mu=None,
+    zsent_dec_logvar=None,
+    zsent_dec_sample=None
 ):
     with tf.variable_scope("decoder") as sc:
         ## compute zc
-        zsent_dec_mu, zsent_dec_logvar, zsent_dec_sample = gauss_layer(
+        zs_dec_mu, zs_dec_logvar, zs_dec_sample = gauss_layer(
             zglobal_sample, params.latent_size, scope="zsent_dec_gauss"
         )
+        # if zsent_dec_sample is None:
+        if not gen_mode:
+            zsent_dec_mu, zsent_dec_logvar, zsent_dec_sample = zs_dec_mu, zs_dec_logvar, zs_dec_sample
+        else:
+            ## for sampling case
+            ## for first time sample, we pass in zero
+            ## and would like to keep the values returned by above gauss
+            ## later on, we would like to use the input values
+            ## which will be non-zero, and not use the gauss outputs
+            indicator = tf.sign(
+                tf.reduce_sum(tf.abs(zsent_dec_sample))
+            )
+            zsent_dec_mu += zs_dec_mu * indicator
+            zsent_dec_logvar += zs_dec_logvar * indicator
+            zsent_dec_sample += zs_dec_sample * indicator
+
         zsent_dec_distribution = [zsent_dec_mu, zsent_dec_logvar]
 
         Zglobal_dec_distribution = [0., np.log(1.0**2).astype(np.float64)]
@@ -615,15 +594,10 @@ def decoder(
             max_sent_len,
             word_embed,
             label_embed,
-            class_vocab_sizes,
-            label_bos_idx,
-            word_bos_idx,
             gen_mode,
+            label_cell_state=label_cell_state,
+            word_cell_state=word_cell_state,
         )
-
-    if gen_mode:
-        word_logits, label_logits, w_sample, l_sample, w_cell_state, l_cell_state, pred_label_indices, pred_word_indices = decoder_output
-        return word_logits, label_logits, zsent_dec_distribution, Zglobal_dec_distribution, l_sample, w_sample, zsent_dec_sample, w_cell_state, l_cell_state, pred_label_indices, pred_word_indices
 
     word_logits, label_logits, w_sample, l_sample, w_cell_state, l_cell_state = decoder_output
     return word_logits, label_logits, zsent_dec_distribution, Zglobal_dec_distribution, l_sample, w_sample, zsent_dec_sample, w_cell_state, l_cell_state
