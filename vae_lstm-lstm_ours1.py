@@ -10,7 +10,7 @@ from tensorflow.python.util.nest import flatten
 import utils.data as data_
 import utils.label_data as label_data_
 import utils.model as model
-from hvae_model_ours import decoder, encoder
+from hvae_model_ours1 import decoder, encoder
 from utils import parameters
 from utils.beam_search import beam_search
 from utils.ptb import reader
@@ -19,6 +19,7 @@ from tqdm import tqdm
 import pickle
 import logging
 from logging.handlers import RotatingFileHandler
+from sklearn.metrics import mutual_info_score
 
 class PTBInput(object):
     """The input data."""
@@ -129,7 +130,42 @@ def calc_mi_two(mu_x, logvar_x, mu_y, logvar_y, z_x, z_y):
     return tf.squeeze(entropy_y - tf.reduce_sum(entropy_y_given_x, -1))
 '''
 
+
 def calc_mi_two(mu_x, logvar_x, mu_y, logvar_y, z_x, z_y):
+
+    # MI(z_x, z_y) = H(z_y) - H(z_y | z_x)
+    # H(z_y | z_x) = p(z_x) * p(z_y| z_x) * log(p(z_y| z_x)) = -E_{x,y} log(p(y|x))
+    # H(z_y) = 0.5 * (1 + logvar + 2 * pi)
+    mu_shape = mu_x.shape
+    x_batch, nz = mu_shape[0], mu_shape[1]
+    y_batch, nz = mu_shape[0], mu_shape[1]
+    
+    entropy_y = -np.mean(-0.5 * np.multiply(nz, np.log(2 * np.pi)) -
+        0.5 * np.sum(1 + logvar_y, axis = -1))
+
+
+    mu_y, logvar_y = np.expand_dims(mu_y, 0), np.expand_dims(logvar_y, 0)
+    mu_x, logvar_x = np.expand_dims(mu_x, 0), np.expand_dims(logvar_x, 0)
+
+    var_y = np.exp(logvar_y)
+    var_x = np.exp(logvar_x)
+    # (z_batch, x_batch, nz)
+    dev = z_y - mu_y
+    dev_x = z_x - mu_x
+
+    density_x =  np.exp(-0.5 * np.sum(np.square(dev_x) / var_x, -1) - 0.5 * (
+        np.multiply(nz, np.log(2 * np.pi))) + np.sum(logvar_x, -1))
+
+
+    log_density = -0.5 * np.sum(np.square(dev) / var_y, -1) - 0.5 * (
+        np.multiply(nz, np.log(2 * np.pi) )) + np.sum(logvar_y, axis = -1)
+    
+    density_y = np.exp(log_density)
+    entropy_y_given_x = -np.multiply(np.multiply(log_density, density_x), density_y)
+    return np.squeeze(entropy_y - np.sum(entropy_y_given_x, axis = -1))
+
+
+def calc_mi_three(mu_x, logvar_x, mu_y, logvar_y, z_x, z_y):
 
     # MI(z_x, z_y) = H(z_y) - H(z_y | z_x)
     # H(z_y | z_x) = p(z_x) * p(z_y| z_x) * log(p(z_y| z_x)) = -E_{x,y} log(p(y|x))
@@ -328,10 +364,11 @@ def main(params):
 
         Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
             vect_inputs, label_inputs_1, params.batch_size, max_sent_len)
+        zsent_dec_mu, zsent_dec_logvar = Zsent_distribution[0], Zsent_distribution[1]
         word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _, dec_word_states, dec_label_states = decoder(
-            d_word_inputs, d_label_inputs, zglobal_sample, params.batch_size,
+            d_word_inputs, d_label_inputs, zglobal_sample,   params.batch_size,
             word_vocab_size, label_vocab_size, max_sent_len, word_embedding,
-            label_embedding)
+            label_embedding, zsent_dec_mu = zsent_dec_mu, zsent_dec_logvar = zsent_dec_logvar, zsent_dec_sample = zsent_sample)
         #decoder(zglobal_sample, params.batch_size, word_vocab_size,label_vocab_size, max_sent_len)
 
         neg_kld_zsent = -1 * tf.reduce_mean(
@@ -348,6 +385,7 @@ def main(params):
                 axis=1))
 
         # label reconstruction loss
+        
         d_label_labels_flat = tf.reshape(d_label_labels, [-1])
         l_cross_entr = tf.nn.sparse_softmax_cross_entropy_with_logits(
             logits=label_logits, labels=d_label_labels_flat)
@@ -399,15 +437,27 @@ def main(params):
             zip(clipped_grad, tf.trainable_variables()))
         
         
-
-        # Gradient decoder
-        decoder_vars = tf.trainable_variables('decoder')
-        gradients_decoder = tf.gradients(
-             total_lower_bound, decoder_vars
+        print("Debug parameters", tf.trainable_variables())
+        print("Debug decoder parameters", tf.trainable_variables('decoder/word'))
+        # Gradient decoder word
+        decoder_word_vars = tf.trainable_variables('decoder/word')
+        gradients_decoder_word = tf.gradients(
+             total_lower_bound, decoder_word_vars
          )
-        clipped_grad_decoder, _ = tf.clip_by_global_norm(gradients_decoder, 5)
-        optimize_decoder = opt.apply_gradients(
-             zip(clipped_grad_decoder, decoder_vars)
+        clipped_grad_decoder_word, _ = tf.clip_by_global_norm(gradients_decoder_word, 5)
+        optimize_decoder_word = opt.apply_gradients(
+             zip(clipped_grad_decoder_word, decoder_word_vars)
+        )
+
+
+        # Gradient decoder label
+        decoder_label_vars = tf.trainable_variables('decoder/label')
+        gradients_decoder_label = tf.gradients(
+             total_lower_bound, decoder_label_vars
+         )
+        clipped_grad_decoder_label, _ = tf.clip_by_global_norm(gradients_decoder_label, 5)
+        optimize_decoder_label = opt.apply_gradients(
+             zip(clipped_grad_decoder_label, decoder_label_vars)
         )
 
 
@@ -452,7 +502,7 @@ def main(params):
         #config = tf.ConfigProto(device_count={'GPU': 0})
         gpu_options = tf.GPUOptions(allow_growth=True)
         config = tf.ConfigProto(gpu_options=gpu_options)
-
+        #'''
         with tf.Session(config=config) as sess:
             print("*********")
             sess.run([
@@ -503,6 +553,7 @@ def main(params):
             aggressive = True
             aggressive_word = True
             aggressive_label = True
+            prev_tlb = 0
             
             for e in tqdm(range(params.num_epochs)):
                     epoch_start_time = datetime.datetime.now()
@@ -544,9 +595,11 @@ def main(params):
 
                                 sent_batch = word_data[indices]
                                 label_batch = label_data[indices]
+
                                 sent_dec_l_batch = word_labels_arr[indices]
                                 sent_l_batch = encoder_word_data[indices]
                                 label_l_batch = label_labels_arr[indices]
+                                
                                 dec_word_inp_batch = decoder_words[indices]
                                 dec_label_inp_batch = decoder_labels[indices]
                                 ## burn_batch_size, burn_sents_len = sent_l_batch.shape
@@ -580,9 +633,23 @@ def main(params):
                                 }
 
                                 ## aggressively optimize encoder words                                
-                                loss, rec, kl = sess.run([total_lower_bound, rec_loss, kl_term_weight], feed_dict=feed)
-                                print("Debug total_lower_bound word:", loss, "rec:", rec, "kl:", kl)
+                                #loss, word_rec, label_rec, kl = sess.run([total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight], feed_dict=feed)
+                                #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl)
+                                z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
+                                = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
+                                Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound,\
+                                 word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_word ], feed_dict=feed)
+                                
+                                #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
                                 burn_cur_loss += loss
+                                mi_s = calc_mi_q( z1a, z1b, zs_sample )
+                                mi_g = calc_mi_q( z3a, z3b, zg_sample )
+                                mi_zc_zl = calc_mi_two(z1a, z1b, z3a, z3b, zs_sample, zg_sample)
+                                mi_y_zl =  mutual_info_score(np.reshape(zs_sample, -1), np.reshape(zg_sample, -1))
+                                print("Encoder word:", loss, "rec_label:", label_rec, "rec_word:", word_rec, "kl:", kl, "kl_y:", klg, "kl_x:", klw, "mig:", mi_g, "mis", mi_s)
+                    			#smi.append(mi_s)
+                    			#gmi.append(mi_g)
+                    			#tmi.append(mi_s+mi_g)
                                 if sub_iter % 311 == 0: 
                                     #sent_count = sub_iter
                                     # * burn_batch_size
@@ -593,9 +660,10 @@ def main(params):
                                         break
                                     burn_pre_loss = burn_cur_loss
                                     burn_cur_loss = 0
-                                _ = sess.run([optimize_word], feed_dict=feed)
+                                #_ = sess.run([optimize_word], feed_dict=feed)
 
-                        if aggressive_word == False and aggressive_label:
+                        #if aggressive_word == False and aggressive_label:
+                        if aggressive_label:
                             sub_iter = 0
                             burn_pre_loss = 1e4
                             burn_cur_loss = 0
@@ -657,8 +725,26 @@ def main(params):
 
                                 #loss = sess.run(
                                 #    total_lower_bound, feed_dict=feed)
-                                loss, rec, kl = sess.run([total_lower_bound, rec_loss, kl_term_weight], feed_dict=feed)
-                                print("Debug total_lower_bound label:", loss,  "rec:", rec, "kl:", kl) 
+
+                                z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
+                                = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
+                                Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_label ], feed_dict=feed)
+                                #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
+                                
+                                burn_cur_loss += loss
+                                mi_s = calc_mi_q( z1a, z1b, zs_sample )
+                                mi_g = calc_mi_q( z3a, z3b, zg_sample )
+                                mi_zc_zl = calc_mi_two(z1a, z1b, z3a, z3b, zs_sample, zg_sample)
+                                mi_y_zl =  mutual_info_score(np.reshape(zs_sample, -1), np.reshape(zg_sample, -1))
+                                #smi.append(mi_s)
+                                #gmi.append(mi_g)
+                                #tmi.append(mi_s+mi_g)
+                                print("Encoder label:", loss, "rec_label:", label_rec, "rec_word:", word_rec, "kl:", kl, "kl_y:", klg, "kl_x:", klw, "mig:", mi_g, "mis", mi_s)
+
+                                # loss, word_rec, label_rec, kl, klg, klw,_ = sess.run([total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight,neg_kld_zglobal, neg_kld_zsent, optimize_label ], feed_dict=feed)
+                                # print("Debug total_lower_bound label:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
+                                # #loss, rec, kl = sess.run([total_lower_bound, rec_loss, kl_term_weight], feed_dict=feed)
+                                # #print("Debug total_lower_bound label:", loss,  "rec:", rec, "kl:", kl) 
                                 burn_cur_loss += loss
                                 if sub_iter % 311 == 0:
                                     #sent_count = sub_iter
@@ -669,49 +755,240 @@ def main(params):
                                         break
                                     burn_pre_loss = burn_cur_loss
                                     burn_cur_loss = 0
-                                _ = sess.run([optimize_label], feed_dict=feed)
+                                #_ = sess.run([optimize_label], feed_dict=feed)
 
 
-                           
-                        # Decoder update
-                        start_idx = it * params.batch_size
-                        end_idx = (it + 1) * params.batch_size
-                        indices = _ids[start_idx:end_idx]
-
-                        sent_batch = word_data[indices]
-                        label_batch = label_data[indices]
-                        sent_dec_l_batch = word_labels_arr[indices]
-                        sent_l_batch = encoder_word_data[indices]
-                        label_l_batch = label_labels_arr[indices]
-                        dec_word_inp_batch = decoder_words[indices]
-                        dec_label_inp_batch = decoder_labels[indices]
-                        length_ = np.array([len(sent) for sent in sent_batch
-                                                ]).reshape(params.batch_size)
-                        #print("Debug size", sent_l_batch.shape, sent_dec_l_batch.shape, length_.shape)
-                        sent_batch = zero_pad(sent_batch, pad)
-                        label_batch = zero_pad(label_batch, pad)
-                        sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
-                        sent_l_batch = zero_pad(sent_l_batch, pad)
-                        label_l_batch = zero_pad(label_l_batch, pad)
-                        dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
-                        dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
                         
-                        feed = {
-                            word_inputs: sent_l_batch,
-                            label_inputs: label_l_batch,
-                            d_word_labels: sent_dec_l_batch,
-                            d_label_labels: label_l_batch,
-                            d_seq_length: length_,
-                            d_word_inputs: dec_word_inp_batch,
-                            d_label_inputs: dec_label_inp_batch,
-                            alpha: alpha_v,
-                            beta: beta_v
-                        }
 
-                        ## aggressively optimize encoder
-                        loss, _ = sess.run(
-                            [total_lower_bound, optimize_decoder],
-                            feed_dict=feed)
+                        if aggressive_word:
+                            sub_iter = 0
+                            burn_pre_loss = 1e4
+                            burn_cur_loss = 0
+                            #while sub_iter < 311:
+                            while(1):
+                                #if opt == 'WORD':
+                                #optimize_encoder = optimize_label
+                                #else:
+                                #    optimize_encoder = optimize_label
+                                # encoder updates
+                                sub_iter += 1
+                                sub_iter %= 311
+                                print('Sub iter label:', sub_iter)
+                                # print('sub_iter:', sub_iter)
+
+                                start_idx = sub_iter * params.batch_size
+                                end_idx = (sub_iter + 1) * params.batch_size
+                                indices = rand_ids[start_idx:end_idx]
+
+                                sent_batch = word_data[indices]
+                                label_batch = label_data[indices]
+                                sent_dec_l_batch = word_labels_arr[indices]
+                                sent_l_batch = encoder_word_data[indices]
+                                label_l_batch = label_labels_arr[indices]
+                                dec_word_inp_batch = decoder_words[indices]
+                                dec_label_inp_batch = decoder_labels[indices]
+                                ## burn_batch_size, burn_sents_len = sent_l_batch.shape
+                                ## TODO the burn_sents_len will be different for each idx?
+                                
+                                burn_batch_size = len(sent_l_batch)
+                                burn_sents_len = len(sent_l_batch[0])
+
+                                # not optimal!!
+                                length_ = np.array([len(sent) for sent in sent_batch
+                                                    ]).reshape(params.batch_size)
+
+                                # prepare encoder and decoder inputs to feed
+                                sent_batch = zero_pad(sent_batch, pad)
+                                label_batch = zero_pad(label_batch, pad)
+                                sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
+                                sent_l_batch = zero_pad(sent_l_batch, pad)
+                                label_l_batch = zero_pad(label_l_batch, pad)
+                                dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                                dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
+
+                                feed = {
+                                    word_inputs: sent_l_batch,
+                                    label_inputs: label_l_batch,
+                                    d_word_labels: sent_dec_l_batch,
+                                    d_label_labels: label_l_batch,
+                                    d_seq_length: length_,
+                                    d_word_inputs: dec_word_inp_batch,
+                                    d_label_inputs: dec_label_inp_batch,
+                                    alpha: alpha_v,
+                                    beta: beta_v
+                                }
+
+                                ## aggressively optimize encoder words
+
+                                #loss = sess.run(
+                                #    total_lower_bound, feed_dict=feed)
+
+                                z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
+                                = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
+                                Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_decoder_word], feed_dict=feed)
+                                #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
+                                
+                                burn_cur_loss += loss
+                                mi_s = calc_mi_q( z1a, z1b, zs_sample )
+                                mi_g = calc_mi_q( z3a, z3b, zg_sample )
+                                mi_zc_zl = calc_mi_two(z1a, z1b, z3a, z3b, zs_sample, zg_sample)
+                                mi_y_zl =  mutual_info_score(np.reshape(zs_sample, -1), np.reshape(zg_sample, -1))
+                                #smi.append(mi_s)
+                                #gmi.append(mi_g)
+                                #tmi.append(mi_s+mi_g)
+                                print("Decoder word:", loss, "rec_label:", label_rec, "rec_word:", word_rec, "kl:", kl, "kl_y:", klg, "kl_x:", klw, "mig:", mi_g, "mis", mi_s)
+                                # loss, word_rec, label_rec, kl, klg, klw,_ = sess.run([total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight,neg_kld_zglobal, neg_kld_zsent, optimize_decoder_word ], feed_dict=feed)
+                                # print("Debug total_lower_bound label dec:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
+                                #loss, rec, kl = sess.run([total_lower_bound, rec_loss, kl_term_weight], feed_dict=feed)
+                                #print("Debug total_lower_bound label:", loss,  "rec:", rec, "kl:", kl) 
+                                burn_cur_loss += loss
+                                if sub_iter % 311 == 0:
+                                    #sent_count = sub_iter
+                                    burn_cur_loss /= 311
+                                    print("Label Burn pre loss:", burn_pre_loss, "Burn cur loss:",burn_cur_loss)
+                                    if (burn_pre_loss < burn_cur_loss):
+                                        print("Break condition true")
+                                        break
+                                    burn_pre_loss = burn_cur_loss
+                                    burn_cur_loss = 0
+                                #_ = sess.run([optimize_label], feed_dict=feed)   
+                        
+
+                        if aggressive_label:
+                            sub_iter = 0
+                            burn_pre_loss = 1e4
+                            burn_cur_loss = 0
+                            #while sub_iter < 311:
+                            while(1):
+                                #if opt == 'WORD':
+                                #optimize_encoder = optimize_label
+                                #else:
+                                #    optimize_encoder = optimize_label
+                                # encoder updates
+                                sub_iter += 1
+                                sub_iter %= 311
+                                print('Sub iter label:', sub_iter)
+                                # print('sub_iter:', sub_iter)
+
+                                start_idx = sub_iter * params.batch_size
+                                end_idx = (sub_iter + 1) * params.batch_size
+                                indices = rand_ids[start_idx:end_idx]
+
+                                sent_batch = word_data[indices]
+                                label_batch = label_data[indices]
+                                sent_dec_l_batch = word_labels_arr[indices]
+                                sent_l_batch = encoder_word_data[indices]
+                                label_l_batch = label_labels_arr[indices]
+                                dec_word_inp_batch = decoder_words[indices]
+                                dec_label_inp_batch = decoder_labels[indices]
+                                ## burn_batch_size, burn_sents_len = sent_l_batch.shape
+                                ## TODO the burn_sents_len will be different for each idx?
+                                
+                                burn_batch_size = len(sent_l_batch)
+                                burn_sents_len = len(sent_l_batch[0])
+
+                                # not optimal!!
+                                length_ = np.array([len(sent) for sent in sent_batch
+                                                    ]).reshape(params.batch_size)
+
+                                # prepare encoder and decoder inputs to feed
+                                sent_batch = zero_pad(sent_batch, pad)
+                                label_batch = zero_pad(label_batch, pad)
+                                sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
+                                sent_l_batch = zero_pad(sent_l_batch, pad)
+                                label_l_batch = zero_pad(label_l_batch, pad)
+                                dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                                dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
+
+                                feed = {
+                                    word_inputs: sent_l_batch,
+                                    label_inputs: label_l_batch,
+                                    d_word_labels: sent_dec_l_batch,
+                                    d_label_labels: label_l_batch,
+                                    d_seq_length: length_,
+                                    d_word_inputs: dec_word_inp_batch,
+                                    d_label_inputs: dec_label_inp_batch,
+                                    alpha: alpha_v,
+                                    beta: beta_v
+                                }
+
+                                ## aggressively optimize encoder words
+
+                                #loss = sess.run(
+                                #    total_lower_bound, feed_dict=feed)
+                                z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
+                                = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
+                                Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_decoder_label ], feed_dict=feed)
+                                
+                                burn_cur_loss += loss
+                                mi_s = calc_mi_q( z1a, z1b, zs_sample )
+                                mi_g = calc_mi_q( z3a, z3b, zg_sample )
+                                mi_zc_zl = calc_mi_two(z1a, z1b, z3a, z3b, zs_sample, zg_sample)
+                                mi_y_zl =  mutual_info_score(np.reshape(zs_sample, -1), np.reshape(zg_sample, -1))
+                                #smi.append(mi_s)
+                                #gmi.append(mi_g)
+                                #tmi.append(mi_s+mi_g)
+                                #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
+                                print("Decoder label:", loss, "rec_label:", label_rec, "rec_word:", word_rec, "kl:", kl, "kl_y:", klg, "kl_x:", klw, "mig:", mi_g, "mis", mi_s)
+                                #loss, word_rec, label_rec, kl, klg, klw,_ = sess.run([total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight,neg_kld_zglobal, neg_kld_zsent, optimize_decoder_label ], feed_dict=feed)
+                                #print("Debug total_lower_bound label dec:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
+                                #loss, rec, kl = sess.run([total_lower_bound, rec_loss, kl_term_weight], feed_dict=feed)
+                                #print("Debug total_lower_bound label:", loss,  "rec:", rec, "kl:", kl) 
+                                burn_cur_loss += loss
+                                if sub_iter % 311 == 0:
+                                    #sent_count = sub_iter
+                                    burn_cur_loss /= 311
+                                    print("Label Burn pre loss:", burn_pre_loss, "Burn cur loss:",burn_cur_loss)
+                                    if (burn_pre_loss < burn_cur_loss):
+                                        print("Break condition true")
+                                        break
+                                    burn_pre_loss = burn_cur_loss
+                                    burn_cur_loss = 0
+                                #_ = sess.run([optimize_label], feed_dict=feed)
+                        # Decoder update
+                        # start_idx = it * params.batch_size
+                        # end_idx = (it + 1) * params.batch_size
+                        # indices = _ids[start_idx:end_idx]
+
+                        # sent_batch = word_data[indices]
+                        # label_batch = label_data[indices]
+                        # sent_dec_l_batch = word_labels_arr[indices]
+                        # sent_l_batch = encoder_word_data[indices]
+                        # label_l_batch = label_labels_arr[indices]
+                        # dec_word_inp_batch = decoder_words[indices]
+                        # dec_label_inp_batch = decoder_labels[indices]
+                        # length_ = np.array([len(sent) for sent in sent_batch
+                        #                         ]).reshape(params.batch_size)
+                        # #print("Debug size", sent_l_batch.shape, sent_dec_l_batch.shape, length_.shape)
+                        # sent_batch = zero_pad(sent_batch, pad)
+                        # label_batch = zero_pad(label_batch, pad)
+                        # sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
+                        # sent_l_batch = zero_pad(sent_l_batch, pad)
+                        # label_l_batch = zero_pad(label_l_batch, pad)
+                        # dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
+                        # dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
+                        
+                        # feed = {
+                        #     word_inputs: sent_l_batch,
+                        #     label_inputs: label_l_batch,
+                        #     d_word_labels: sent_dec_l_batch,
+                        #     d_label_labels: label_l_batch,
+                        #     d_seq_length: length_,
+                        #     d_word_inputs: dec_word_inp_batch,
+                        #     d_label_inputs: dec_label_inp_batch,
+                        #     alpha: alpha_v,
+                        #     beta: beta_v
+                        # }
+
+                        # ## aggressively optimize encoder
+                        # if aggressive_word:
+                        # 	loss, _ = sess.run(
+                        #     	[total_lower_bound, optimize_decoder_word],
+                        #     	feed_dict=feed)
+                        # if aggressive_label:
+                        # 	loss, _ = sess.run(
+                        #     	[total_lower_bound, optimize_decoder_label],
+                        #     	feed_dict=feed)
 
                     else:
                     ## standard VAE updates
@@ -795,15 +1072,15 @@ def main(params):
                             alpha: alpha_v,
                             beta: beta_v
                         }
-                    z1a,z1b, z3a, z3b, kzg, kzs, tlb, klw, alpha_, beta_, rec = sess.run(
+                    z1a,z1b, zs_sample, z3a, z3b, zg_sample, kzg, kzs, tlb, klw, alpha_, beta_, rec_label, rec_word = sess.run(
                             [
-                                Zsent_distribution[0], Zsent_distribution[1],
-                                Zsent_dec_distribution[0],
-                                Zsent_dec_distribution[1], neg_kld_zglobal,
+                                Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
+                                Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample,
+                                neg_kld_zglobal,
                                 neg_kld_zsent, total_lower_bound,
-                                kl_term_weight, alpha, beta, rec_loss
+                                kl_term_weight, alpha, beta, label_rec_loss, word_rec_loss
                             ],
-                            feed_dict=feed)
+                            feed_dict=feed )
 
                     all_alpha.append(alpha_v)
                     all_beta.append(beta_v)
@@ -811,12 +1088,25 @@ def main(params):
                     all_kl.append(klw)
                     all_klzg.append(-kzg)
                     all_klzs.append(-kzs)
+                    mi_s = calc_mi_q( z1a, z1b, zs_sample )
+                    mi_g = calc_mi_q( z3a, z3b, zg_sample )
+                    mi_zc_zl = calc_mi_two(z1a, z1b, z3a, z3b, zs_sample, zg_sample)
+                    mi_y_zl =  mutual_info_score(np.reshape(zs_sample, -1), np.reshape(zg_sample, -1))
+                    
+                    smi.append(mi_s)
+                    gmi.append(mi_g)
+                    tmi.append(mi_s+mi_g)
+                    write_lists_to_file('mi_values_bug4.txt', smi, gmi, tmi)
                     print("TLB:", tlb)
-                    print("Debug total_lower_bound:", tlb, "rec:", rec, "kl:", klw)
-                    write_lists_to_file('test_plot_pos2.txt', all_alpha,
+                    print("Debug total_lower_bound:", tlb, "rec_label:", rec_label, "rec_word:", rec_word, "kl:", klw, "kl_y:", kzg, "kl_x:", kzs, "mig:", mi_g, "mis", mi_s)
+                    write_lists_to_file('test_plot_bug4.txt', all_alpha,
                                         all_beta, all_tlb, all_kl,
                                         all_klzg, all_klzs)
 
+                    if abs(tlb-prev_tlb) < 1e-03 :
+                    	print("DIFF:", abs(tlb-prev_tlb))
+                    	break
+                    prev_tlb = tlb
                     ## for MI
                     #sent_mi = 0
                     #global_mi = 0
@@ -827,7 +1117,8 @@ def main(params):
                         num_examples = 0
                         mi_s = 0
                         mi_g = 0
-                        mi_zc_zl = 0
+                        mi_zc_zl = 0.0
+                        mi_y_zl = 0.0
 
                         ## weighted average on calc_mi_q
                         val_len = len(encoder_val_data)
@@ -847,44 +1138,45 @@ def main(params):
                                 word_inputs: word_input,
                                 label_inputs: label_input,
                             }
-                            zs_dist, zs_sample, zg_dist, zg_sample, _, _ = sess.run(
+                            
+                            zs_dist, zs_sample, zg_dist, zg_sample, _, y_pre = sess.run(
                                 [
                                     Zsent_distribution, zsent_sample,
                                     Zglobal_distribition, zglobal_sample,
                                     zsent_state, zglobal_state
-                                ],
-                                feed_dict=feed)
+                                ],  feed_dict = feed )
 
-                            mi_s += calc_mi_q(zs_dist[0], zs_dist[1], zs_sample)
-                            mi_g += calc_mi_q(zg_dist[0], zg_dist[1], zg_sample)
+                            mi_s += calc_mi_q( zs_dist[0], zs_dist[1], zs_sample )
+                            mi_g += calc_mi_q( zg_dist[0], zg_dist[1], zg_sample )
                             mi_zc_zl += calc_mi_two(zs_dist[0], zs_dist[1], zg_dist[0], zg_dist[1], zs_sample, zg_sample)
+                            mi_y_zl +=  mutual_info_score(np.reshape(zs_sample, -1), np.reshape(zg_sample, -1))
                         
                         #global_mi += mi_g * batch_size
-
                         #sent_mi /= num_examples
                         #global_mi /= num_examples
+                        
                         mi_s /= val_it
                         mi_g /= val_it
                         mi_zc_zl /= val_it
-
-                        #cur_mi = sent_mi + global_mi
-
+                        mi_y_zl /= val_it
+                        cur_mi = mi_s + mi_g
+                        '''
                         #smi.append(sent_mi)
                         #gmi.append(global_mi)
                         #tmi.append(cur_mi)
 
                         smi.append(mi_s)
                         gmi.append(mi_g)
-                        tmi.append(mi_zc_zl)
-                        mi_g += mi_zc_zl
-           
-                        write_lists_to_file('mi_values_pos2.txt', smi, gmi, tmi)
-                    # write_lists_to_file('mi_ext_values.txt', smi_ext, gmi_ext, tmi_ext, smi_ind, gmi_ind, tmi_ind)
+                        tmi.append(cur_mi)
+                        #mi_g += mi_zc_zl
+           				'''
+                        
+                    	# write_lists_to_file('mi_ext_values.txt', smi_ext, gmi_ext, tmi_ext, smi_ind, gmi_ind, tmi_ind)
 
                     
                     
                     if cur_it % 1 == 0:
-                        print("sent mi:%.4f. gmi mi:%.4f. two mi:%.4f" %(mi_s, mi_g, mi_zc_zl))
+                        print("sent mi:%.4f. gmi mi:%.4f. two mi:%.4f. mi_y_zl:%.4f" %(mi_s, mi_g, mi_zc_zl, mi_y_zl))
                         if aggressive :
                             if mi_s < mi_s_prev and mi_g < mi_g_prev:
                                 aggressive = False
@@ -899,29 +1191,29 @@ def main(params):
                                 print("STOP BURNING label", cur_it)
                             else:
                                 aggressive_label = True
-                        #'''
+                       
                         else:
-                            if cur_it % 100:
+                            if cur_it % 100 or (mi_s > mi_s_prev and mi_g > mi_g_prev):
                                 aggressive = True
                                 aggressive_word = True
                                 aggressive_label = True
-                            if mi_s > mi_s_prev :
-                                aggressive = True
-                                aggressive_word = True
-                            if mi_g > mi_g_prev :
-                                aggressive_label = True
+                            #if mi_s > mi_s_prev :
+                            #    aggressive = True
+                            #    aggressive_word = True
+                            #if mi_g > mi_g_prev :
+                            #    aggressive_label = True
 
-                            '''
-                            if mi_s > mi_s_prev or mi_g > mi_g_prev:
-                                    aggressive = True
-                            if mi_s > mi_s_prev :
-                                aggressive_word = True
-                                print("START BURNING word:", cur_it)
-                            if mi_g > mi_g_prev :
-                                aggressive_label = True
-                                print("STOP BURNING word:", cur_it)
-                            '''
-                        #'''
+                            # 
+                            # if mi_s > mi_s_prev or mi_g > mi_g_prev:
+                            #         aggressive = True
+                            # if mi_s > mi_s_prev :
+                            #     aggressive_word = True
+                            #     print("START BURNING word:", cur_it)
+                            # if mi_g > mi_g_prev :
+                            #     aggressive_label = True
+                            #     print("STOP BURNING word:", cur_it)
+                            # 
+                        
                         mi_s_prev = mi_s
                         mi_g_prev = mi_g
                         #mi_s_prev = mi_s
@@ -936,6 +1228,7 @@ def main(params):
                                                      global_step=cur_it)
                         # print(model_path_name)
 
+        #'''
 
 
 if __name__ == "__main__":
