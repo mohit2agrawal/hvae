@@ -230,7 +230,7 @@ def main(params):
 
             biased_sampling = True
             no_word_repetition = False
-            PARA_NUM = 5
+            PARA_NUM = 1000
 
             with open(out_sentence_file,
                       'w+') as sent_f, open(out_labels_file, 'w+') as label_f:
@@ -254,6 +254,29 @@ def main(params):
                     ## for biasing in sampling
                     first_word = sent_l_batch[0][0]
                     first_label = label_l_batch[0][0]
+
+                    ## print the sentence being paraphrased
+                    encoder_sent = list(
+                        map(lambda x: data_dict.idx2word[x], sent_l_batch[0])
+                    )
+                    sent_f.write(
+                        ' '.join(
+                            encoder_sent[:encoder_sent.index(data_dict.eos)]
+                        )
+                    )
+                    sent_f.write('\n')
+
+                    encoder_labels = list(
+                        map(
+                            lambda x: data_dict.l_idx2word[x], label_l_batch[0]
+                        )
+                    )
+                    label_f.write(
+                        ' '.join(
+                            encoder_labels[:encoder_labels.index(data_dict.eos)]
+                        )
+                    )
+                    label_f.write('\n')
 
                     for para_num in range(PARA_NUM):
                         ## for decoder init
