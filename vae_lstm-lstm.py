@@ -139,9 +139,16 @@ def main(params):
             vect_inputs, label_inputs_1, params.batch_size, max_sent_len
         )
         word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _, dec_word_states, dec_label_states = decoder(
-            d_word_inputs, d_label_inputs, zglobal_sample, params.batch_size,
-            word_vocab_size, label_vocab_size, max_sent_len, word_embedding,
-            label_embedding
+            d_word_inputs,
+            d_label_inputs,
+            zglobal_sample,
+            params.batch_size,
+            word_vocab_size,
+            label_vocab_size,
+            max_sent_len,
+            word_embedding,
+            label_embedding,
+            zsent_dec_sample=zsent_sample
         )
 
         neg_kld_zsent = -1 * tf.reduce_mean(
@@ -178,7 +185,7 @@ def main(params):
             l_masked_losses, reduction_indices=1
         ) / d_seq_length
         label_rec_loss = tf.reduce_mean(l_mean_loss_by_example)
-        # label_perplexity = tf.exp(label_rec_loss)
+        label_perplexity = tf.exp(label_rec_loss)
 
         # Word reconstruction loss
         # print(word_logits.shape)
@@ -195,7 +202,7 @@ def main(params):
             w_masked_losses, reduction_indices=1
         ) / d_seq_length
         word_rec_loss = tf.reduce_mean(w_mean_loss_by_example)
-        # word_perplexity = tf.exp(word_rec_loss)
+        word_perplexity = tf.exp(word_rec_loss)
 
         rec_loss = word_rec_loss + label_rec_loss
 
@@ -302,7 +309,7 @@ def main(params):
             decoder_val_words = np.array(decoder_val_words)
             for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
-                print("Epoch: {} started at: {}".format(e, epoch_start_time))
+                print("Epoch: {}/{} started at: {}".format(e, params.num_epochs, epoch_start_time))
 
                 ## alpha, beta schedule
                 # if cur_it >= 8000:
@@ -419,8 +426,11 @@ def main(params):
                     dec_inp_labels = zero_pad(dec_inp_labels, pad)
                     num_examples += batch_size
 
-                    wp, lp = sess.run(
-                        [total_lower_bound, kl_term_weight],
+                    _, _, wp, lp = sess.run(
+                        [
+                            total_lower_bound, kl_term_weight, word_perplexity,
+                            label_perplexity
+                        ],
                         feed_dict={
                             word_inputs: word_input,
                             label_inputs: label_input,
@@ -444,6 +454,9 @@ def main(params):
                 all_w_ppl.append(w_ppl)
                 write_lists_to_file('test_plot_ppl.txt', all_l_ppl, all_w_ppl)
                 print("Time Taken:", datetime.datetime.now() - epoch_start_time)
+
+            ## save model at end of training
+            model_path_name = saver.save(sess, path_to_save, global_step=cur_it)
 
 
 if __name__ == "__main__":
