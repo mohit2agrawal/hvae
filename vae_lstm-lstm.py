@@ -364,8 +364,8 @@ def main(params):
                     feed = {
                         word_inputs: sent_l_batch,
                         label_inputs: label_l_batch,
-                        d_word_labels: dec_word_inp_batch,
-                        d_label_labels: dec_label_inp_batch,
+                        d_word_labels: sent_l_batch,
+                        d_label_labels: label_l_batch,
                         d_seq_length: length_,
                         d_word_inputs: dec_word_inp_batch,
                         d_label_inputs: dec_label_inp_batch,
