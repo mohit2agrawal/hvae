@@ -18,9 +18,9 @@ class Parameters():
     name = "ptb_pos"
     num_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
-    latent_size = 10
-    num_epochs = 10000
-    learning_rate = 0.0001
+    latent_size = 32
+    num_epochs = 3120
+    learning_rate = 0.00001
     batch_size = 32
     # for decoding
     temperature = 1.0
@@ -54,8 +54,10 @@ class Parameters():
     fine_tune_embed = False
     # technical parameters
     is_training = True
-    LOG_DIR = './model_logs_' + name + "_sample_periodic/"
-    MODEL_DIR = './models_ckpts_' + name + "_sample_periodic/"
+    #LOG_DIR = './model_logs_' + name + "_original/"
+    #MODEL_DIR = './models_ckpts_' + name + "_original/"
+    LOG_DIR = './model_logs_' + name + "_bugfix13_new1/"
+    MODEL_DIR = './models_ckpts_' + name + "_bugfix13_new1/"
     visualise = False
     # gru base cell partially implemented
     base_cell = 'lstm'  # or GRU
@@ -192,5 +194,3 @@ def test():
     print(type(params.beta_lag), params.beta_lag)
 
 
-if __name__ == '__main__':
-    test()

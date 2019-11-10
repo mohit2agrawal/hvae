@@ -10,7 +10,7 @@ from tensorflow.python.util.nest import flatten
 import utils.data as data_
 import utils.label_data as label_data_
 import utils.model as model
-from hvae_model import decoder, encoder
+from hvae_model_ours1 import decoder, encoder
 from utils import parameters
 from utils.beam_search import beam_search
 from utils.ptb import reader
@@ -201,12 +201,20 @@ def main(params):
 
         Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
             vect_inputs, label_inputs_1, params.batch_size, max_sent_len)
+        zsent_dec_mu, zsent_dec_logvar = Zsent_distribution[0], Zsent_distribution[1]
+        word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _, dec_word_states, dec_label_states = decoder(
+            d_word_inputs, d_label_inputs, zglobal_sample,   params.batch_size,
+            word_vocab_size, label_vocab_size, max_sent_len, word_embedding,
+            label_embedding, zsent_dec_mu = zsent_dec_mu, zsent_dec_logvar = zsent_dec_logvar, zsent_dec_sample = zsent_sample)
+	'''
+	Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
+            vect_inputs, label_inputs_1, params.batch_size, max_sent_len)
         word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _, dec_word_states, dec_label_states = decoder(
             d_word_inputs, d_label_inputs, zglobal_sample, params.batch_size,
             word_vocab_size, label_vocab_size, max_sent_len, word_embedding,
             label_embedding)
         #decoder(zglobal_sample, params.batch_size, word_vocab_size,label_vocab_size, max_sent_len)
-
+	'''
         neg_kld_zsent = -1 * tf.reduce_mean(
             tf.reduce_sum(
                 kld(Zsent_distribution[0], Zsent_distribution[1],
@@ -421,7 +429,7 @@ def main(params):
 
                             ## aggressively optimize encoder
                             loss, _ = sess.run(
-                                total_lower_bound, optimize_encoder,
+                                [total_lower_bound, optimize_encoder],
                                 feed_dict=feed)
 
                             if sub_iter % 15 == 0:
@@ -473,9 +481,34 @@ def main(params):
                         }
 
                         ## aggressively optimize encoder
-                        loss, _ = sess.run(
-                            [total_lower_bound, optimize_decoder],
+                        zs_dist, zs_sample, zg_dist, zg_sample, loss, _, = sess.run(
+                            [
+                                Zsent_distribution, zsent_sample,
+                                Zglobal_distribition, zglobal_sample,
+                                total_lower_bound, optimize_decoder
+                            ],
                             feed_dict=feed)
+
+                        mi_s = sess.run(mutual_info,
+                                        feed_dict={
+                                            mi_mu: zs_dist[0],
+                                            mi_logvar: zs_dist[1],
+                                            mi_samples: zs_sample
+                                        })
+                    	sent_mi = mi_s 
+
+                    	mi_g = sess.run(mutual_info,
+                                        feed_dict={
+                                            mi_mu: zg_dist[0],
+                                            mi_logvar: zg_dist[1],
+                                            mi_samples: zg_sample
+                                        })
+                    	global_mi = mi_g
+                    	cur_mi = sent_mi + global_mi
+
+                    	smi.append(sent_mi)
+                    	gmi.append(global_mi)
+                    	tmi.append(cur_mi)
                     else:
                     ## standard VAE updates
 
@@ -515,11 +548,11 @@ def main(params):
                         }
 
                         ## both decoder and encoder updates
-                        z1a, z1b, z3a, z3b, kzg, kzs, tlb, klw, _, alpha_, beta_ = sess.run(
+                        z1a, z1b, zs_sample, z3a, z3b, zg_sample, kzg, kzs, tlb, klw, _, alpha_, beta_ = sess.run(
                             [
-                                Zsent_distribution[0], Zsent_distribution[1],
+                                Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
                                 Zsent_dec_distribution[0],
-                                Zsent_dec_distribution[1], neg_kld_zglobal,
+                                Zsent_dec_distribution[1], zglobal_sample, neg_kld_zglobal,
                                 neg_kld_zsent, total_lower_bound,
                                 kl_term_weight, optimize, alpha, beta
                             ],
@@ -531,16 +564,36 @@ def main(params):
                     	all_kl.append(klw)
                     	all_klzg.append(-kzg)
                     	all_klzs.append(-kzs)
-                    	write_lists_to_file('test_plot.txt', all_alpha,
+                    	mi_s = sess.run(mutual_info,
+                                        feed_dict={
+                                            mi_mu: z1a,
+                                            mi_logvar: z1b,
+                                            mi_samples: zs_sample
+                                        })
+                    	sent_mi = mi_s 
+
+                    	mi_g = sess.run(mutual_info,
+                                        feed_dict={
+                                            mi_mu: z3a,
+                                            mi_logvar: z3b,
+                                            mi_samples: zg_sample
+                                        })
+                    	global_mi = mi_g
+                    	smi.append(sent_mi)
+                    	gmi.append(global_mi)
+                    	tmi.append(cur_mi)
+                    	
+                    	write_lists_to_file('test_plot_original.txt', all_alpha,
                                         all_beta, all_tlb, all_kl,
                                         all_klzg, all_klzs)
 
                     ## for MI
-                    sent_mi = 0
-                    global_mi = 0
-                    num_examples = 0
-
+                    
                     ## weighted average on calc_mi_q
+                    #'''
+                    num_examples = 0 
+                    global_mi = 0
+                    sent_mi = 0
                     val_len = len(encoder_val_data)
                     for val_it in range(val_len // params.batch_size):
                         s_idx = val_it * params.batch_size
@@ -586,16 +639,17 @@ def main(params):
                     global_mi /= num_examples
                     cur_mi = sent_mi + global_mi
 
-                    smi.append(sent_mi)
-                    gmi.append(global_mi)
-                    tmi.append(cur_mi)
+                    #smi.append(sent_mi)
+                    #gmi.append(global_mi)
+                    #tmi.append(cur_mi)
+                    #'''
                     # smi_ext.append(sent_mi)
                     # gmi_ext.append(global_mi)
                     # tmi_ext.append(cur_mi)
                     # smi_ind.append(0)
                     # gmi_ind.append(0)
                     # tmi_ind.append(0)
-                    write_lists_to_file('mi_values.txt', smi, gmi, tmi)
+                    write_lists_to_file('mi_values_original.txt', smi, gmi, tmi)
                     # write_lists_to_file('mi_ext_values.txt', smi_ext, gmi_ext, tmi_ext, smi_ind, gmi_ind, tmi_ind)
 
                     cur_it += 1
