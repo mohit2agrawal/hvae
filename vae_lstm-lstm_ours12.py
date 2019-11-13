@@ -70,65 +70,6 @@ def log_sum_exp(value, axis=None, keepdims=False):
         sum_exp = np.sum(np.exp(value - m))
         return m + np.log(sum_exp)
 
-'''
-def log_sum_exp(value, axis=None, keepdims=False):
-    """Numerically stable implementation of the (torch) operation
-    value.exp().sum(axis, keepdims).log()
-    """
-    if axis is not None:
-        m = tf.reduce_max(value, axis=axis, keepdims=True)
-        value0 = value - m
-        if keepdims is False:
-            m = tf.squeeze(m, axis)
-        return m + tf.log(
-            tf.reduce_sum(tf.exp(value0), axis=axis, keepdims=keepdims))
-    else:
-        m = tf.reduce_max(value)
-        sum_exp = tf.reduce_sum(tf.exp(value - m))
-        return m + tf.log(sum_exp)
-'''
-'''
-def calc_mi_two(mu_x, logvar_x, mu_y, logvar_y, z_x, z_y):
-
-    # MI(z_x, z_y) = H(z_y) - H(z_y | z_x)
-    # H(z_y | z_x) = p(z_x) * p(z_y| z_x) * log(p(z_y| z_x)) = -E_{x,y} log(p(y|x))
-    # H(z_y) = 0.5 * (1 + logvar + 2 * pi)
-    mu_shape = tf.shape(mu_x)
-    x_batch, nz = mu_shape[0], mu_shape[1]
-    y_batch, nz = mu_shape[0], mu_shape[1]
-    
-    entropy_y = -tf.reduce_mean(
-        -0.5 *
-        tf.cast(tf.multiply(np.cast(nz, dtype=tf.float64),
-                            tf.cast(tf.log(2 * np.pi), dtype=tf.float64)),
-                dtype=tf.float64) -
-        0.5 * tf.cast(tf.reduce_sum(1 + logvar_y, -1), dtype=tf.float64))
-
-
-    mu_y, logvar_y = tf.expand_dims(mu_y, 0), tf.expand_dims(logvar_y, 0)
-    mu_x, logvar_x = tf.expand_dims(mu_x, 0), tf.expand_dims(logvar_x, 0)
-
-    var_y = tf.exp(logvar_y)
-    var_x = tf.exp(logvar_x)
-    # (z_batch, x_batch, nz)
-    dev = z_y - mu_y
-    dev_x = z_x - mu_x
-
-    density_x =  tf.exp(-0.5 * tf.reduce_sum(tf.square(dev_x) / var_x, -1) - 0.5 * (
-        tf.multiply(tf.cast(nz, dtype=tf.float64),
-                    tf.cast(tf.log(2 * np.pi), dtype=tf.float64))) + tf.cast(
-                        tf.reduce_sum(logvar_x, -1), dtype=tf.float64))
-
-
-    log_density = -0.5 * tf.reduce_sum(tf.square(dev) / var_y, -1) - 0.5 * (
-        tf.multiply(tf.cast(nz, dtype=tf.float64),
-                    tf.cast(tf.log(2 * np.pi), dtype=tf.float64))) + tf.cast(
-                        tf.reduce_sum(logvar_y, -1), dtype=tf.float64)
-    
-    density_y = tf.exp(log_density)
-    entropy_y_given_x = -tf.multiply(tf.multiply(log_density, density_x), density_y)
-    return tf.squeeze(entropy_y - tf.reduce_sum(entropy_y_given_x, -1))
-'''
 
 
 def calc_mi_two(mu_x, logvar_x, mu_y, logvar_y, z_x, z_y):
@@ -198,46 +139,7 @@ def calc_mi_three(mu_x, logvar_x, mu_y, logvar_y, z_x, z_y):
     entropy_y_given_x = -np.multiply(np.multiply(log_density, density_x), density_y)
     return np.squeeze(entropy_y - np.sum(entropy_y_given_x, axis = -1))
 
-'''
-def calc_mi_q(mu, logvar, z_samples):
 
-    # mu, logvar = Zsent_distribution
-    mu_shape = tf.shape(mu)
-    x_batch, nz = mu_shape[0], mu_shape[1]
-
-    # [z_batch, 1, nz]
-    z_samples = tf.expand_dims(z_samples, 1)
-
-    # E_{q(z|x)}log(q(z|x)) = -0.5*nz*log(2*\pi) - 0.5*(1+logvar).sum(-1)
-    neg_entropy = tf.reduce_mean(
-        -0.5 *
-        tf.cast(tf.multiply(tf.cast(nz, dtype=tf.float64),
-                            tf.cast(tf.log(2 * np.pi), dtype=tf.float64)),
-                dtype=tf.float64) -
-        0.5 * tf.cast(tf.reduce_sum(1 + logvar, -1), dtype=tf.float64))
-
-    # [1, x_batch, nz]
-    mu, logvar = tf.expand_dims(mu, 0), tf.expand_dims(logvar, 0)
-    var = tf.exp(logvar)
-
-    # (z_batch, x_batch, nz)
-    dev = z_samples - mu
-
-    # (z_batch, x_batch)
-    log_density = -0.5 * tf.reduce_sum(tf.square(dev) / var, -1) - 0.5 * (
-        tf.multiply(tf.cast(nz, dtype=tf.float64),
-                    tf.cast(tf.log(2 * np.pi), dtype=tf.float64))) + tf.cast(
-                        tf.reduce_sum(logvar, -1), dtype=tf.float64)
-
-    # log q(z): aggregate posterior
-    # [z_batch]
-    log_qz = tf.cast(log_sum_exp(log_density, axis=1),
-                     dtype=tf.float64) - tf.log(
-                         tf.cast(x_batch, dtype=tf.float64))
-
-    return tf.squeeze(neg_entropy - tf.reduce_mean(log_qz, -1))
-
-'''
 
 def calc_mi_q(mu, logvar, z_samples):
 
@@ -453,7 +355,7 @@ def main(params):
         # Gradient decoder label
         decoder_label_vars = tf.trainable_variables('decoder/label')
         gradients_decoder_label = tf.gradients(
-             rec_loss, decoder_label_vars
+             total_lower_bound, decoder_label_vars
          )
         clipped_grad_decoder_label, _ = tf.clip_by_global_norm(gradients_decoder_label, 5)
         optimize_decoder_label = opt.apply_gradients(
@@ -473,7 +375,7 @@ def main(params):
 
         # Gradienr encoder label
         encoder_label_vars = tf.trainable_variables('encoder/label')
-        gradients_label = tf.gradients(total_lower_bound, encoder_label_vars,
+        gradients_label = tf.gradients(rec_loss, encoder_label_vars,
                                          name='gradients_encoder_label')
         clipped_grad_label, _ = tf.clip_by_global_norm(
             gradients_label, 5, name='clipped_encoder_word')
@@ -534,6 +436,7 @@ def main(params):
             summary_writer.add_graph(sess.graph)
             
             num_iters = len(word_data) // params.batch_size
+            extra = len(word_data) % params.batch_size
             cur_it = 0
 
             all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
@@ -558,11 +461,11 @@ def main(params):
             alpha_v = beta_v = 1
             it = 0
             #aggressive = False
-	    aggressive = True
+            aggressive = True
             aggressive_word = True
             aggressive_label = True
             decoder_true = True
-	    prev_tlb = 0
+            prev_tlb = 0
             
             for e in tqdm(range(params.num_epochs)):
                     epoch_start_time = datetime.datetime.now()
@@ -588,13 +491,8 @@ def main(params):
                             burn_pre_loss = 1e4
                             #while sub_iter < 311:
                             while(1):
-                                #if opt == 'WORD':
-                                #optimize_encoder = optimize_word
-                                #else:
-                                #    optimize_encoder = optimize_label
-                                # encoder updates
                                 sub_iter += 1
-                                sub_iter %= 311
+                                sub_iter %= num_iters
                                 print('Sub iter word:', sub_iter)
                                 # print('sub_iter:', sub_iter)
 
@@ -641,15 +539,12 @@ def main(params):
                                     beta: beta_v
                                 }
 
-                                ## aggressively optimize encoder words                                
-                                #loss, word_rec, label_rec, kl = sess.run([total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight], feed_dict=feed)
-                                #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl)
                                 z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
                                 = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
                                 Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound,\
                                  word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_word ], feed_dict=feed)
                                 
-                                #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
+                                
                                 burn_cur_loss += word_rec + label_rec
                                 mi_s = calc_mi_q( z1a, z1b, zs_sample )
                                 mi_g = calc_mi_q( z3a, z3b, zg_sample )
@@ -660,12 +555,10 @@ def main(params):
                     			#gmi.append(mi_g)
                     			#tmi.append(mi_s+mi_g)
                                 if sub_iter % 100 == 0: 
-                                    #sent_count = sub_iter
-                                    # * burn_batch_size
-				    if sub_iter == 0:
-					len_ = 11
-				    else:
-					len_ = 100
+                                    if sub_iter == 0:
+                                    	len_ = extra
+                                    else:
+                                    	len_ = 100
                                     burn_cur_loss /= len_
                                     print("Word Burn pre loss:", burn_pre_loss, "Burn cur loss:",burn_cur_loss)
                                     if (burn_pre_loss < burn_cur_loss):
@@ -690,7 +583,7 @@ def main(params):
                                 #    optimize_encoder = optimize_label
                                 # encoder updates
                                 sub_iter += 1
-                                sub_iter %= 311
+                                sub_iter %= num_iters
                                 print('Sub iter label:', sub_iter)
                                 # print('sub_iter:', sub_iter)
 
@@ -746,8 +639,7 @@ def main(params):
                                 Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_label ], feed_dict=feed)
                                 #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
                                 
-                                burn_cur_loss += loss
-				#word_rec + label_rec
+                                burn_cur_loss += word_rec + label_rec
                                 mi_s = calc_mi_q( z1a, z1b, zs_sample )
                                 mi_g = calc_mi_q( z3a, z3b, zg_sample )
                                 mi_zc_zl = calc_mi_two(z1a, z1b, z3a, z3b, zs_sample, zg_sample)
@@ -765,22 +657,19 @@ def main(params):
                                 if sub_iter % 100 == 0:
                                     #sent_count = sub_iter
                                     if sub_iter == 0:
-                                        len_ = 11
+                                        len_ = extra
                                     else:
                                         len_ = 100
                                     burn_cur_loss /= len_
-				    #burn_cur_loss /= 100
+                                    #burn_cur_loss /= 100
                                     print("Label Burn pre loss:", burn_pre_loss, "Burn cur loss:",burn_cur_loss)
                                     if (burn_pre_loss < burn_cur_loss):
                                         print("Break condition true")
                                         break
                                     burn_pre_loss = burn_cur_loss
                                     burn_cur_loss = 0
-                                #_ = sess.run([optimize_label], feed_dict=feed)
-
-
-                        
-			#'''
+                                    #_ = sess.run([optimize_label], feed_dict=feed)
+                        #'''
                         if aggressive_word and decoder_true:
                             sub_iter = 0
                             burn_pre_loss = 1e4
@@ -868,11 +757,11 @@ def main(params):
                                     #sent_count = sub_iter
                                     #burn_cur_loss /= 100
                                     if sub_iter == 0:
-                                        len_ = 11
+                                        len_ = extra
                                     else:
                                         len_ = 100
                                     burn_cur_loss /= len_
-                    		    print("Word dec Burn pre loss:", burn_pre_loss, "Burn cur loss:",burn_cur_loss)
+                                    print("Word dec Burn pre loss:", burn_pre_loss, "Burn cur loss:",burn_cur_loss)
                                     if (burn_pre_loss < burn_cur_loss):
                                         print("Break condition true")
                                         break
@@ -893,7 +782,7 @@ def main(params):
                                 #    optimize_encoder = optimize_label
                                 # encoder updates
                                 sub_iter += 1
-                                sub_iter %= 311
+                                sub_iter %= num_iters
                                 print('Sub iter label:', sub_iter)
                                 # print('sub_iter:', sub_iter)
 
@@ -965,8 +854,8 @@ def main(params):
                                 if sub_iter % 100 == 0:
                                     #sent_count = sub_iter
                                     #burn_cur_loss /= 100
-				    if sub_iter == 0:
-                                        len_ = 11
+                                    if sub_iter == 0:
+                                        len_ = extra
                                     else:
                                         len_ = 100
                                     burn_cur_loss /= len_
@@ -978,8 +867,8 @@ def main(params):
                                     burn_cur_loss = 0
                                 #_ = sess.run([optimize_label], feed_dict=feed)
                         #'''
-			'''
-			# Decoder update
+                        '''
+						# Decoder update
                         start_idx = it * params.batch_size
                         end_idx = (it + 1) * params.batch_size
                         indices = _ids[start_idx:end_idx]
@@ -1019,13 +908,13 @@ def main(params):
                                 z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
                                 = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
                                 Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_decoder_word ], feed_dict=feed)
-				mi_s = calc_mi_q( z1a, z1b, zs_sample )
+                                mi_s = calc_mi_q( z1a, z1b, zs_sample )
                                 mi_g = calc_mi_q( z3a, z3b, zg_sample )
                                 mi_zc_zl = calc_mi_two(z1a, z1b, z3a, z3b, zs_sample, zg_sample)
                                 mi_y_zl =  mutual_info_score(np.reshape(zs_sample, -1), np.reshape(zg_sample, -1))
                                 print("Decoder word:", loss, "rec_label:", label_rec, "rec_word:", word_rec, "kl:", kl, "kl_y:", klg, "kl_x:", klw, "mig:", mi_g, "mis", mi_s) 
-			if aggressive_label:
-				z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
+                        if aggressive_label:
+                        		z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
                                 = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
                                 Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_decoder_label ], feed_dict=feed)
                                 mi_s = calc_mi_q( z1a, z1b, zs_sample )
@@ -1156,7 +1045,7 @@ def main(params):
                     #global_mi = 0
                     cur_it += 1
                     it += 1
-                    it %= 311
+                    it %= num_iters
                     if cur_it % 1 == 0 :
                         num_examples = 0
                         mi_s = 0
