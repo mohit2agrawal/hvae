@@ -9,9 +9,9 @@ from tensorflow.python import debug as tf_debug
 from tensorflow.python.util.nest import flatten
 
 import utils.data as data_
-# import utils.label_data as label_data_
+import utils.label_data as label_data_
 import utils.model as model
-from hvae_model1 import decoder, encoder
+from sivae_model_mod import decoder, encoder
 from utils import parameters
 from utils.beam_search import beam_search
 from utils.ptb import reader
@@ -39,8 +39,8 @@ def kld(p_mu, p_logvar, q_mu, q_logvar):
     compute D_KL(p || q) of two Gaussians
     """
     return -0.5 * (
-        1 + p_logvar - q_logvar -
-        (tf.square(p_mu - q_mu) + tf.exp(p_logvar)) / tf.exp(q_logvar)
+        1 + p_logvar - q_logvar - (tf.square(p_mu - q_mu) + tf.exp(p_logvar)) /
+        tf.exp(tf.cast(q_logvar, tf.float64))
     )
 
 
@@ -55,6 +55,7 @@ def write_lists_to_file(filename, *lists):
                 f.write(str(x))
                 f.write(' ')
             f.write('\n')
+
 
 def log_sum_exp(value, axis=None, keepdims=False):
     """Numerically stable implementation of the (torch) operation
@@ -171,45 +172,35 @@ def calc_mi_q(mu, logvar, z_samples):
     return np.squeeze(neg_entropy - np.mean(log_qz, axis=-1))
 
 
+
 def main(params):
     # data_folder = './DATA/parallel_data_10k/'
     data_folder = './DATA/' + params.name
     # data in form [data, labels]
-    train_data_raw, train_label_raw, val_data_raw, val_label_raw = data_.ptb_read(
+    train_data_raw, train_label_raw, val_data_raw, val_label_raw, vocab = data_.read_data(
         data_folder
     )
-    word_data, encoder_word_data, word_labels_arr, word_embed_arr, data_dict, label_data, label_labels_arr, label_embed_arr, encoder_val_data, encoder_val_data_shifted, val_labels_arr, decoder_val_words, decoder_val_labels = data_.prepare_data(
-        train_data_raw, train_label_raw, val_data_raw, val_label_raw, params,
-        data_folder
+    data, encoder_data, val_data, encoder_val_data, embed_arr, data_dict, labels, val_labels, label_embed_arr = data_.prepare_data(
+        train_data_raw, train_label_raw, val_data_raw, val_label_raw, vocab,
+        params, data_folder
     )
 
-    decoder_words, decoder_labels = word_data, label_data
+    max_len_word = max(max(map(len, data)), max(map(len, val_data)))
+    print('max len word:', max_len_word)
 
-    max_sent_len = max(
-        max(map(len, word_data)), max(map(len, encoder_val_data))
-    )
+    word_vocab_size = data_dict.vocab_size
+    label_vocab_size = len(label_embed_arr)
 
     with tf.Graph().as_default() as graph:
 
         label_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="lable_inputs"
+            dtype=tf.int32, shape=[None], name="lable_inputs"
         )
         word_inputs = tf.placeholder(
             dtype=tf.int32, shape=[None, None], name="word_inputs"
         )
-
-        d_word_labels = tf.placeholder(
-            shape=[None, None], dtype=tf.int32, name="d_word_labels"
-        )
-        d_label_labels = tf.placeholder(
-            shape=[None, None], dtype=tf.int32, name="d_label_labels"
-        )
-
         d_word_inputs = tf.placeholder(
             dtype=tf.int32, shape=[None, None], name="d_word_inputs"
-        )
-        d_label_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="d_label_inputs"
         )
 
         with tf.device("/cpu:0"):
@@ -224,7 +215,7 @@ def main(params):
             else:
                 # [data_dict.vocab_size, params.embed_size]
                 word_embedding = tf.Variable(
-                    word_embed_arr,
+                    embed_arr,
                     trainable=params.fine_tune_embed,
                     name="word_embedding",
                     dtype=tf.float64
@@ -244,27 +235,23 @@ def main(params):
                     label_embedding, label_inputs, name="label_lookup"
                 )
 
-        # inputs = tf.unstack(inputs, num=num_steps, axis=1)
-        word_vocab_size = data_dict.vocab_size
-        label_vocab_size = data_dict.label_vocab_size
         # seq_length = tf.placeholder_with_default([0.0], shape=[None])
-        d_seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
-        # qz = q_net(word_inputs, seq_length, params.batch_size)
+        d_seq_length_word = tf.placeholder(shape=[None], dtype=tf.float64)
 
-        Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
-            vect_inputs, label_inputs_1, params.batch_size, max_sent_len
+        Zsent_distribution, zsent_sample_enc, Zglobal_distribition, zglobal_sample, enc_word_cell_state = encoder(
+            vect_inputs, label_inputs_1, params.batch_size, d_seq_length_word
         )
-        word_logits_arr, label_logits_arr, word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, _, dec_word_states, dec_label_states = decoder(
+
+        word_logits, label_softmax, _, Zsent_dec_distribution,  Zglobal_dec_distribution, _, dec_word_states = decoder(
             d_word_inputs,
-            d_label_inputs,
             zglobal_sample,
             params.batch_size,
             word_vocab_size,
             label_vocab_size,
-            max_sent_len,
+            max_len_word,
             word_embedding,
-            label_embedding,
-            zsent_dec_sample=zsent_sample
+            label_input=label_inputs_1,
+            z_sent_sample=zsent_sample_enc
         )
 
         neg_kld_zsent = -1 * tf.reduce_mean(
@@ -288,35 +275,69 @@ def main(params):
             )
         )
 
-        d_label_labels_flat = tf.reshape(d_label_labels, [-1])
-        label_softmax = tf.nn.softmax(label_logits)
-        l_mask_labels = tf.one_hot(
-            d_label_labels_flat, label_vocab_size, dtype=tf.float64
-        )
-        l_masked_softmax = tf.multiply(label_softmax, l_mask_labels)
+        ## label reconstruction loss
+        #d_label_labels_flat = tf.reshape(d_label_labels, [-1])
+        #l_cross_entr = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        #    logits=label_logits, labels=d_label_labels_flat
+        #)
+        #l_mask_labels = tf.sign(tf.cast(d_label_labels_flat, dtype=tf.float64))
+        #l_masked_losses = l_mask_labels * l_cross_entr
+        ## reshape again
+        #l_masked_losses = tf.reshape(l_masked_losses, tf.shape(d_label_labels))
+        #l_mean_loss_by_example = tf.reduce_sum(
+        #    l_masked_losses, reduction_indices=1
+        #) / d_seq_length_label
+        #label_rec_loss = tf.reduce_mean(l_mean_loss_by_example)
+        #label_perplexity = tf.exp(label_rec_loss)
+
+        # Word reconstruction loss
+        # print(word_logits.shape)
+
+        #d_word_labels_flat = tf.reshape(d_word_labels, [-1])
+        #print(d_word_labels_flat.shape)
+        #w_cross_entr = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        #    logits=word_logits, labels=d_word_labels_flat
+        #)
+        #w_mask_labels = tf.sign(tf.cast(d_word_labels_flat, dtype=tf.float64))
+        #w_masked_losses_1 = w_mask_labels * w_cross_entr
+        #w_masked_losses = tf.reshape(w_masked_losses_1, tf.shape(d_word_labels))
+        #w_mean_loss_by_example = tf.reduce_sum(
+        #    w_masked_losses, reduction_indices=1
+        #) / d_seq_length_word
+        #word_rec_loss = tf.reduce_mean(w_mean_loss_by_example)
+        #word_perplexity = tf.exp(word_rec_loss)
+
+        # d_label_labels_flat = tf.reshape(d_label_labels, [-1])
+        # label_softmax = tf.nn.softmax(label_logits)
+        ## label_softmax vs label_inputs_1
+        # l_mask_labels = tf.one_hot(
+        #     d_label_labels_flat, label_vocab_size, dtype=tf.float64
+        # )
+        l_masked_softmax = tf.multiply(label_softmax, label_inputs_1)
         l_softmax_single = tf.reduce_sum(l_masked_softmax, 1)
 
         ## reshape to get back per sent
-        l_softmax_batch = tf.reshape(l_softmax_single, tf.shape(d_label_labels))
+        # l_softmax_batch = tf.reshape(l_softmax_single, tf.shape(d_label_labels))
         ## mask to remove effect of padding
         # l_sent_mask = tf.sign(tf.cast(d_label_labels_flat, dtype=tf.float64))
         # l_sent_mask = tf.reshape(l_sent_mask, tf.shape(d_label_labels))
         # l_softmax_batch_masked = tf.multiply(
         #     tf.math.log(l_softmax_batch), l_sent_mask
         # )
-        l_softmax_mean_per_sent = tf.reduce_sum(
-            tf.math.log(l_softmax_batch), 1
-        )  #/ d_seq_length
-        l_softmax_mean_per_sent_seq = tf.reduce_sum(
-            tf.math.log(l_softmax_batch), 1
-        ) / max_sent_len
+        # l_softmax_mean_per_sent = tf.reduce_sum(
+        #     tf.math.log(l_softmax_single), 1
+        # )  #/ d_seq_length
+        # l_softmax_mean_per_sent_seq = tf.reduce_sum(
+        #     tf.math.log(l_softmax_batch), 1
+        # ) / max_len_label
 
-        label_rec_loss = -tf.reduce_mean(l_softmax_mean_per_sent)
-        label_perplexity = tf.exp(-tf.reduce_mean(l_softmax_mean_per_sent_seq))
+        label_rec_loss = -tf.reduce_mean(tf.math.log(l_softmax_single))
+        # label_rec_loss = -tf.reduce_mean(l_softmax_mean_per_sent)
+        # label_perplexity = tf.exp(-tf.reduce_mean(l_softmax_mean_per_sent_seq))
 
         # Word reconstruction loss
         # print(word_logits.shape)
-        d_word_labels_flat = tf.reshape(d_word_labels, [-1])
+        d_word_labels_flat = tf.reshape(word_inputs, [-1])
         word_softmax = tf.nn.softmax(word_logits)
         w_mask_labels = tf.one_hot(
             d_word_labels_flat, word_vocab_size, dtype=tf.float64
@@ -325,7 +346,7 @@ def main(params):
         w_softmax_single = tf.reduce_sum(w_masked_softmax, 1)
 
         ## reshape to get back per sent
-        w_softmax_batch = tf.reshape(w_softmax_single, tf.shape(d_word_labels))
+        w_softmax_batch = tf.reshape(w_softmax_single, tf.shape(word_inputs))
         ## mask to remove effect of padding
         # w_sent_mask = tf.sign(tf.cast(d_word_labels_flat, dtype=tf.float64))
         # w_sent_mask = tf.reshape(w_sent_mask, tf.shape(d_word_labels))
@@ -337,7 +358,7 @@ def main(params):
         )  #/ d_seq_length
         w_softmax_mean_per_sent_seq = tf.reduce_sum(
             tf.math.log(w_softmax_batch), 1
-        ) / max_sent_len
+        ) / max_len_word
 
         word_rec_loss = -tf.reduce_mean(w_softmax_mean_per_sent)
         word_perplexity = tf.exp(-tf.reduce_mean(w_softmax_mean_per_sent_seq))
@@ -353,74 +374,80 @@ def main(params):
         #    tf.cast(annealing, dtype=tf.float64), tf.cast(kld_loss, dtype=tf.float64))
 
         alpha = tf.placeholder(tf.float64)
-        # # alpha_val = tf.to_float(alpha)
+        # alpha_val = tf.to_float(alpha)
         beta = tf.placeholder(tf.float64)
-        # # beta_val = tf.to_float(beta)
+        # beta_val = tf.to_float(beta)
         kl_term_weight = - tf.multiply(tf.cast(alpha, dtype=tf.float64), tf.cast(neg_kld_zsent, dtype=tf.float64)) \
                          - tf.multiply(tf.cast(beta, dtype=tf.float64), tf.cast(neg_kld_zglobal, dtype=tf.float64))
 
         total_lower_bound = rec_loss + kl_term_weight
-        # total_lower_bound = rec_loss
 
-        opt = tf.train.AdamOptimizer(learning_rate=params.learning_rate,
-                                     name='Adam')
+
+        opt = tf.train.AdamOptimizer(
+            learning_rate=params.learning_rate, name='Adam'
+        )
         # Gradient all
-        gradients = tf.gradients(total_lower_bound,
-                                 tf.trainable_variables(),
-                                 name='gradients')
+        gradients = tf.gradients(
+            total_lower_bound, tf.trainable_variables(), name='gradients'
+        )
         clipped_grad, _ = tf.clip_by_global_norm(gradients, 5, name='clipped')
         optimize = opt.apply_gradients(
-            zip(clipped_grad, tf.trainable_variables()))
+            zip(clipped_grad, tf.trainable_variables())
+        )
 
         # print("Debug parameters", tf.trainable_variables())
         # print("Debug decoder parameters",
         #       tf.trainable_variables('decoder/word'))
         # Gradient decoder word
         decoder_word_vars = tf.trainable_variables('decoder/word')
-        gradients_decoder_word = tf.gradients(total_lower_bound,
-                                              decoder_word_vars)
+        gradients_decoder_word = tf.gradients(
+            total_lower_bound, decoder_word_vars
+        )
         clipped_grad_decoder_word, _ = tf.clip_by_global_norm(
-            gradients_decoder_word, 5)
+            gradients_decoder_word, 5
+        )
         optimize_decoder_word = opt.apply_gradients(
-            zip(clipped_grad_decoder_word, decoder_word_vars))
+            zip(clipped_grad_decoder_word, decoder_word_vars)
+        )
 
         # Gradient decoder label
         decoder_label_vars = tf.trainable_variables('decoder/label')
-        gradients_decoder_label = tf.gradients(total_lower_bound,
-                                               decoder_label_vars)
+        gradients_decoder_label = tf.gradients(
+            total_lower_bound, decoder_label_vars
+        )
         clipped_grad_decoder_label, _ = tf.clip_by_global_norm(
-            gradients_decoder_label, 5)
+            gradients_decoder_label, 5
+        )
         optimize_decoder_label = opt.apply_gradients(
-            zip(clipped_grad_decoder_label, decoder_label_vars))
+            zip(clipped_grad_decoder_label, decoder_label_vars)
+        )
 
         # Gradient encoder word
         encoder_word_vars = tf.trainable_variables('encoder/word')
-        gradients_word = tf.gradients(rec_loss,
-                                      encoder_word_vars,
-                                      name='gradients_encoder_word')
+        gradients_word = tf.gradients(
+            rec_loss, encoder_word_vars, name='gradients_encoder_word'
+        )
         clipped_grad_word, _ = tf.clip_by_global_norm(
-            gradients_word, 5, name='clipped_encoder_word')
+            gradients_word, 5, name='clipped_encoder_word'
+        )
         optimize_word = opt.apply_gradients(
-            zip(clipped_grad_word, encoder_word_vars))
+            zip(clipped_grad_word, encoder_word_vars)
+        )
 
         # Gradienr encoder label
         encoder_label_vars = tf.trainable_variables('encoder/label')
-        gradients_label = tf.gradients(rec_loss,
-                                       encoder_label_vars,
-                                       name='gradients_encoder_label')
+        gradients_label = tf.gradients(
+            rec_loss, encoder_label_vars, name='gradients_encoder_label'
+        )
         clipped_grad_label, _ = tf.clip_by_global_norm(
-            gradients_label, 5, name='clipped_encoder_word')
+            gradients_label, 5, name='clipped_encoder_word'
+        )
         optimize_label = opt.apply_gradients(
-            zip(clipped_grad_label, encoder_label_vars))
+            zip(clipped_grad_label, encoder_label_vars)
+        )
 
         saver = tf.train.Saver(max_to_keep=10)
-        all_saver = tf.train.Saver(max_to_keep=0)
-        # config = tf.ConfigProto(device_count={'GPU': 0})
-
-        # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
-        gpu_options = tf.GPUOptions(allow_growth=True)
-        config = tf.ConfigProto(gpu_options=gpu_options)
-
+        config = tf.ConfigProto(device_count={'GPU': 0})
         with tf.Session(config=config) as sess:
             print("*********")
             sess.run(
@@ -429,11 +456,6 @@ def main(params):
                     tf.local_variables_initializer()
                 ]
             )
-
-            # print('====')
-            # for v in tf.global_variables():
-            #     print(v.name)
-            # print('====')
 
             ## save the values weights are initialized by
             # with tf.variable_scope("", reuse=True):
@@ -451,27 +473,12 @@ def main(params):
 
             ## Load saved state
             try:
-                # path = os.path.join(params.MODEL_DIR, "vae_lstm_model-10700")
                 path = params.ckpt_path
                 if path:
                     print("***Loading state from:", path)
-
-                    # var_new = ['decoder/word/mu/weights/Adam:0',
-                    # 'decoder/word/mu/weights/Adam_1:0',
-                    # 'decoder/word/mu/biases/Adam:0',
-                    # 'decoder/word/mu/biases/Adam_1:0',
-                    # 'decoder/word/logvar/weights/Adam:0',
-                    # 'decoder/word/logvar/weights/Adam_1:0',
-                    # 'decoder/word/logvar/biases/Adam:0',
-                    # 'decoder/word/logvar/biases/Adam_1:0']
-
-                    # var_old = [v for v in tf.global_variables() if v.name not in var_new]
-                    # saver_old = tf.train.Saver(var_old, max_to_keep=10)
-                    # saver_old.restore(sess, path)
-
                     # chkp.print_tensors_in_checkpoint_file(path, tensor_name='', all_tensors=True)
                     saver.restore(sess, path)
-                    print("*******Model Restored*******")
+                    print("******* Model Restored ***********")
             except:
                 print("-----exception occurred--------")
                 traceback.print_exc()
@@ -496,8 +503,8 @@ def main(params):
             summary_writer = tf.summary.FileWriter(params.LOG_DIR, sess.graph)
             summary_writer.add_graph(sess.graph)
             #ptb_data = PTBInput(params.batch_size, train_data)
-            num_iters = len(word_data) // params.batch_size
-            extra = len(word_data) % params.batch_size
+            num_iters = len(data) // params.batch_size
+            extra = len(data) % params.batch_size
             cur_it = 0
 
             all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
@@ -509,15 +516,13 @@ def main(params):
                 params.fn, params.num_epochs * num_iters, params.cycles,
                 params.cycle_proportion, params.beta_lag, params.zero_start
             )
-            word_data = np.array(word_data)
-            label_data = np.array(label_data)
-            word_labels_arr = np.array(word_labels_arr)
-            encoder_word_data = np.array(encoder_word_data)
-            label_labels_arr = np.array(label_labels_arr)
-            decoder_words = np.array(decoder_words)
-            decoder_labels = np.array(decoder_labels)
-            decoder_val_labels = np.array(decoder_val_labels)
-            decoder_val_words = np.array(decoder_val_words)
+
+            data = np.array(data)
+            encoder_data = np.array(encoder_data)
+            val_data = np.array(val_data)
+            encoder_val_data = np.array(encoder_val_data)
+            labels = np.array(labels)
+            val_labels = np.array(val_labels)
 
             sub_iter = 0  ## for aggressive encoder optim
 
@@ -525,7 +530,7 @@ def main(params):
             mi_s_prev = 0
             mi_g_prev = 0
             # zero padding
-            pad = max_sent_len
+            sent_pad = max_len_word
             #no_batches = params.batch_size
             alpha_v = beta_v = 1
             it = 0
@@ -542,16 +547,16 @@ def main(params):
             cur_epoch_elbo_sum = 0
             current_epoch = 0
             # while True:
-            for e in tqdm(range(params.num_epochs)):
+            for e in range(params.num_epochs):
                 epoch_start_time = datetime.datetime.now()
-                if current_epoch % num_iters == 0:
+                # print("Epoch: {}/{} started at: {}".format(e, params.num_epochs, epoch_start_time))
+                if current_epoch%num_iters==0:
                     print(
                         "Epoch: {}/{} started at: {}".format(
-                            current_epoch/ num_iters, params.num_epochs/ num_iters ,epoch_start_time
+                            current_epoch%num_iters, params.num_epochs/num_iters ,epoch_start_time
                         )
                     )
                 current_epoch += 1
-                # print("Epoch: {}/{} started at: {}".format(e, params.num_epochs, epoch_start_time))
 
                 print("it", it, 'aggressive:', aggressive, 'aggressive_word:',
                       aggressive_word, 'aggressive_label:', aggressive_label)
@@ -559,11 +564,11 @@ def main(params):
                 burn_num_words = 0
                 #burn_pre_loss = 1e4
 
-                #rand_ids = np.random.permutation(len(word_data))
-                _ids = range(len(word_data))
+                #rand_ids = np.random.permutation(len(data))
+                _ids = range(len(data))
 
                 if aggressive:
-                    rand_ids = np.random.permutation(len(word_data))
+                    rand_ids = np.random.permutation(len(data))
                     if aggressive_word:
                         sub_iter = 0
                         burn_cur_loss = 0
@@ -579,50 +584,40 @@ def main(params):
                             end_idx = (sub_iter + 1) * params.batch_size
                             indices = rand_ids[start_idx:end_idx]
 
-                            sent_batch = word_data[indices]
-                            label_batch = label_data[indices]
+                            sent_batch = data[indices]
+                            label_batch = labels[indices]
 
-                            sent_dec_l_batch = word_labels_arr[indices]
-                            sent_l_batch = encoder_word_data[indices]
-                            label_l_batch = label_labels_arr[indices]
+                            sent_l_batch = encoder_data[indices]
 
-                            dec_word_inp_batch = decoder_words[indices]
-                            dec_label_inp_batch = decoder_labels[indices]
+                            dec_word_inp_batch = data[indices]
+                            dec_label_inp_batch = labels[indices]
                             ## burn_batch_size, burn_sents_len = sent_l_batch.shape
                             ## TODO the burn_sents_len will be different for each idx?
                             burn_batch_size = len(sent_l_batch)
                             burn_sents_len = len(sent_l_batch[0])
 
                             # not optimal !!
-                            length_ = np.array([
+                            word_length_ = np.array([
                                 len(sent) for sent in sent_batch
                             ]).reshape(params.batch_size)
 
                             # prepare encoder and decoder inputs to feed
-                            sent_batch = zero_pad(sent_batch, pad)
-                            label_batch = zero_pad(label_batch, pad)
-                            sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
-                            sent_l_batch = zero_pad(sent_l_batch, pad)
-                            label_l_batch = zero_pad(label_l_batch, pad)
+                            sent_batch = zero_pad(sent_batch, sent_pad)
+                            sent_l_batch = zero_pad(sent_l_batch, sent_pad)
                             dec_word_inp_batch = zero_pad(
-                                dec_word_inp_batch, pad)
-                            dec_label_inp_batch = zero_pad(
-                                dec_label_inp_batch, pad)
+                                dec_word_inp_batch, sent_pad)
 
                             feed = {
                                 word_inputs: sent_l_batch,
-                                label_inputs: label_l_batch,
-                                d_word_labels: sent_l_batch,
-                                d_label_labels: label_l_batch,
-                                d_seq_length: length_,
+                                label_inputs: label_batch,
+                                d_seq_length_word: word_length_,
                                 d_word_inputs: dec_word_inp_batch,
-                                d_label_inputs: dec_label_inp_batch,
                                 alpha: alpha_v,
                                 beta: beta_v
                             }
 
                             z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
-                            = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
+                            = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample_enc,
                             Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound,\
                              word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_word ], feed_dict=feed)
 
@@ -676,13 +671,11 @@ def main(params):
                             end_idx = (sub_iter + 1) * params.batch_size
                             indices = rand_ids[start_idx:end_idx]
 
-                            sent_batch = word_data[indices]
-                            label_batch = label_data[indices]
-                            sent_dec_l_batch = word_labels_arr[indices]
-                            sent_l_batch = encoder_word_data[indices]
-                            label_l_batch = label_labels_arr[indices]
-                            dec_word_inp_batch = decoder_words[indices]
-                            dec_label_inp_batch = decoder_labels[indices]
+                            sent_batch = data[indices]
+                            label_batch = labels[indices]
+                            sent_l_batch = encoder_data[indices]
+                            dec_word_inp_batch = data[indices]
+                            dec_label_inp_batch = labels[indices]
                             ## burn_batch_size, burn_sents_len = sent_l_batch.shape
                             ## TODO the burn_sents_len will be different for each idx?
 
@@ -690,29 +683,21 @@ def main(params):
                             burn_sents_len = len(sent_l_batch[0])
 
                             # not optimal!!
-                            length_ = np.array([
+                            word_length_ = np.array([
                                 len(sent) for sent in sent_batch
                             ]).reshape(params.batch_size)
 
                             # prepare encoder and decoder inputs to feed
-                            sent_batch = zero_pad(sent_batch, pad)
-                            label_batch = zero_pad(label_batch, pad)
-                            sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
-                            sent_l_batch = zero_pad(sent_l_batch, pad)
-                            label_l_batch = zero_pad(label_l_batch, pad)
+                            sent_batch = zero_pad(sent_batch, sent_pad)
+                            sent_l_batch = zero_pad(sent_l_batch, sent_pad)
                             dec_word_inp_batch = zero_pad(
-                                dec_word_inp_batch, pad)
-                            dec_label_inp_batch = zero_pad(
-                                dec_label_inp_batch, pad)
+                                dec_word_inp_batch, sent_pad)
 
                             feed = {
                                 word_inputs: sent_l_batch,
-                                label_inputs: label_l_batch,
-                                d_word_labels: sent_l_batch,
-                                d_label_labels: label_l_batch,
-                                d_seq_length: length_,
+                                label_inputs: label_batch,
+                                d_seq_length_word: word_length_,
                                 d_word_inputs: dec_word_inp_batch,
-                                d_label_inputs: dec_label_inp_batch,
                                 alpha: alpha_v,
                                 beta: beta_v
                             }
@@ -723,7 +708,7 @@ def main(params):
                             #    total_lower_bound, feed_dict=feed)
 
                             z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
-                            = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
+                            = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample_enc,
                             Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_label ], feed_dict=feed)
                             #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
 
@@ -781,13 +766,11 @@ def main(params):
                             end_idx = (sub_iter + 1) * params.batch_size
                             indices = rand_ids[start_idx:end_idx]
 
-                            sent_batch = word_data[indices]
-                            label_batch = label_data[indices]
-                            sent_dec_l_batch = word_labels_arr[indices]
-                            sent_l_batch = encoder_word_data[indices]
-                            label_l_batch = label_labels_arr[indices]
-                            dec_word_inp_batch = decoder_words[indices]
-                            dec_label_inp_batch = decoder_labels[indices]
+                            sent_batch = data[indices]
+                            label_batch = labels[indices]
+                            sent_l_batch = encoder_data[indices]
+                            dec_word_inp_batch = data[indices]
+                            dec_label_inp_batch = labels[indices]
                             ## burn_batch_size, burn_sents_len = sent_l_batch.shape
                             ## TODO the burn_sents_len will be different for each idx?
 
@@ -795,29 +778,21 @@ def main(params):
                             burn_sents_len = len(sent_l_batch[0])
 
                             # not optimal!!
-                            length_ = np.array([
+                            word_length_ = np.array([
                                 len(sent) for sent in sent_batch
                             ]).reshape(params.batch_size)
 
                             # prepare encoder and decoder inputs to feed
-                            sent_batch = zero_pad(sent_batch, pad)
-                            label_batch = zero_pad(label_batch, pad)
-                            sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
-                            sent_l_batch = zero_pad(sent_l_batch, pad)
-                            label_l_batch = zero_pad(label_l_batch, pad)
+                            sent_batch = zero_pad(sent_batch, sent_pad)
+                            sent_l_batch = zero_pad(sent_l_batch, sent_pad)
                             dec_word_inp_batch = zero_pad(
-                                dec_word_inp_batch, pad)
-                            dec_label_inp_batch = zero_pad(
-                                dec_label_inp_batch, pad)
+                                dec_word_inp_batch, sent_pad)
 
                             feed = {
                                 word_inputs: sent_l_batch,
-                                label_inputs: label_l_batch,
-                                d_word_labels: sent_l_batch,
-                                d_label_labels: label_l_batch,
-                                d_seq_length: length_,
+                                label_inputs: label_batch,
+                                d_seq_length_word: word_length_,
                                 d_word_inputs: dec_word_inp_batch,
-                                d_label_inputs: dec_label_inp_batch,
                                 alpha: alpha_v,
                                 beta: beta_v
                             }
@@ -828,7 +803,7 @@ def main(params):
                             #    total_lower_bound, feed_dict=feed)
 
                             z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
-                            = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
+                            = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample_enc,
                             Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_decoder_word], feed_dict=feed)
                             #print("Debug total_lower_bound word:", loss, "word_rec:", word_rec, "label_rec:", label_rec, "kl:", kl, "klg:", klg, "klw:", klw)
 
@@ -886,13 +861,11 @@ def main(params):
                             end_idx = (sub_iter + 1) * params.batch_size
                             indices = rand_ids[start_idx:end_idx]
 
-                            sent_batch = word_data[indices]
-                            label_batch = label_data[indices]
-                            sent_dec_l_batch = word_labels_arr[indices]
-                            sent_l_batch = encoder_word_data[indices]
-                            label_l_batch = label_labels_arr[indices]
-                            dec_word_inp_batch = decoder_words[indices]
-                            dec_label_inp_batch = decoder_labels[indices]
+                            sent_batch = data[indices]
+                            label_batch = labels[indices]
+                            sent_l_batch = encoder_data[indices]
+                            dec_word_inp_batch = data[indices]
+                            dec_label_inp_batch = labels[indices]
                             ## burn_batch_size, burn_sents_len = sent_l_batch.shape
                             ## TODO the burn_sents_len will be different for each idx?
 
@@ -900,29 +873,21 @@ def main(params):
                             burn_sents_len = len(sent_l_batch[0])
 
                             # not optimal!!
-                            length_ = np.array([
+                            word_length_ = np.array([
                                 len(sent) for sent in sent_batch
                             ]).reshape(params.batch_size)
 
                             # prepare encoder and decoder inputs to feed
-                            sent_batch = zero_pad(sent_batch, pad)
-                            label_batch = zero_pad(label_batch, pad)
-                            sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
-                            sent_l_batch = zero_pad(sent_l_batch, pad)
-                            label_l_batch = zero_pad(label_l_batch, pad)
+                            sent_batch = zero_pad(sent_batch, sent_pad)
+                            sent_l_batch = zero_pad(sent_l_batch, sent_pad)
                             dec_word_inp_batch = zero_pad(
-                                dec_word_inp_batch, pad)
-                            dec_label_inp_batch = zero_pad(
-                                dec_label_inp_batch, pad)
+                                dec_word_inp_batch, sent_pad)
 
                             feed = {
                                 word_inputs: sent_l_batch,
-                                label_inputs: label_l_batch,
-                                d_word_labels: sent_l_batch,
-                                d_label_labels: label_l_batch,
-                                d_seq_length: length_,
+                                label_inputs: label_batch,
+                                d_seq_length_word: word_length_,
                                 d_word_inputs: dec_word_inp_batch,
-                                d_label_inputs: dec_label_inp_batch,
                                 alpha: alpha_v,
                                 beta: beta_v
                             }
@@ -932,7 +897,7 @@ def main(params):
                             #loss = sess.run(
                             #    total_lower_bound, feed_dict=feed)
                             z1a, z1b, zs_sample, z3a, z3b, zg_sample, loss, word_rec, label_rec, kl, klg, klw, _ \
-                            = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample,
+                            = sess.run([Zsent_distribution[0], Zsent_distribution[1], zsent_sample_enc,
                             Zglobal_distribition[0], Zglobal_distribition[1], zglobal_sample, total_lower_bound, word_rec_loss, label_rec_loss, kl_term_weight, neg_kld_zglobal, neg_kld_zsent, optimize_decoder_label ], feed_dict=feed)
 
                             burn_cur_loss += word_rec + label_rec
@@ -974,34 +939,26 @@ def main(params):
                     start_idx = it * params.batch_size
                     end_idx = (it + 1) * params.batch_size
                     #it+=1
-                    sent_batch = word_data[start_idx:end_idx]
-                    label_batch = label_data[start_idx:end_idx]
-                    sent_dec_l_batch = word_labels_arr[start_idx:end_idx]
-                    sent_l_batch = encoder_word_data[start_idx:end_idx]
-                    label_l_batch = label_labels_arr[start_idx:end_idx]
-                    dec_word_inp_batch = decoder_words[start_idx:end_idx]
-                    dec_label_inp_batch = decoder_labels[start_idx:end_idx]
+                    sent_batch = data[start_idx:end_idx]
+                    label_batch = labels[start_idx:end_idx]
+                    sent_l_batch = encoder_data[start_idx:end_idx]
+                    dec_word_inp_batch = data[start_idx:end_idx]
+                    dec_label_inp_batch = labels[start_idx:end_idx]
 
                     # not optimal!!
-                    length_ = np.array([len(sent) for sent in sent_batch
-                                        ]).reshape(params.batch_size)
+                    word_length_ = np.array([
+                                len(sent) for sent in sent_batch
+                            ]).reshape(params.batch_size)
 
-                    sent_batch = zero_pad(sent_batch, pad)
-                    label_batch = zero_pad(label_batch, pad)
-                    sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
-                    sent_l_batch = zero_pad(sent_l_batch, pad)
-                    label_l_batch = zero_pad(label_l_batch, pad)
-                    dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
-                    dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
-
+                    sent_batch = zero_pad(sent_batch, sent_pad)
+                    sent_l_batch = zero_pad(sent_l_batch, sent_pad)
+                    dec_word_inp_batch = zero_pad(
+                        dec_word_inp_batch, sent_pad)
                     feed = {
                         word_inputs: sent_l_batch,
-                        label_inputs: label_l_batch,
-                        d_word_labels: sent_l_batch,
-                        d_label_labels: label_l_batch,
-                        d_seq_length: length_,
+                        label_inputs: label_batch,
+                        d_seq_length_word: word_length_,
                         d_word_inputs: dec_word_inp_batch,
-                        d_label_inputs: dec_label_inp_batch,
                         alpha: alpha_v,
                         beta: beta_v
                     }
@@ -1040,48 +997,43 @@ def main(params):
                     #     all_klzg, all_klzs, all_rl, all_lrl, all_wrl
                     # )
 
+
+
+
                 start_idx = it * params.batch_size
                 end_idx = (it + 1) * params.batch_size
                 #it+=1
-                sent_batch = word_data[start_idx:end_idx]
-                label_batch = label_data[start_idx:end_idx]
-                sent_dec_l_batch = word_labels_arr[start_idx:end_idx]
-                sent_l_batch = encoder_word_data[start_idx:end_idx]
-                label_l_batch = label_labels_arr[start_idx:end_idx]
-                dec_word_inp_batch = decoder_words[start_idx:end_idx]
-                dec_label_inp_batch = decoder_labels[start_idx:end_idx]
+                sent_batch = data[start_idx:end_idx]
+                label_batch = labels[start_idx:end_idx]
+                sent_l_batch = encoder_data[start_idx:end_idx]
+                dec_word_inp_batch = data[start_idx:end_idx]
+                dec_label_inp_batch = labels[start_idx:end_idx]
 
                 # not optimal!!
-                length_ = np.array([len(sent) for sent in sent_batch
-                                    ]).reshape(params.batch_size)
+                word_length_ = np.array([
+                                len(sent) for sent in sent_batch
+                            ]).reshape(params.batch_size)
 
-                sent_batch = zero_pad(sent_batch, pad)
-                label_batch = zero_pad(label_batch, pad)
-                sent_dec_l_batch = zero_pad(sent_dec_l_batch, pad)
-                sent_l_batch = zero_pad(sent_l_batch, pad)
-                label_l_batch = zero_pad(label_l_batch, pad)
-                dec_word_inp_batch = zero_pad(dec_word_inp_batch, pad)
-                dec_label_inp_batch = zero_pad(dec_label_inp_batch, pad)
-
+                sent_batch = zero_pad(sent_batch, sent_pad)
+                sent_l_batch = zero_pad(sent_l_batch, sent_pad)
+                dec_word_inp_batch = zero_pad(
+                    dec_word_inp_batch, sent_pad)
                 feed = {
                     word_inputs: sent_l_batch,
-                    label_inputs: label_l_batch,
-                    d_word_labels: sent_l_batch,
-                    d_label_labels: label_l_batch,
-                    d_seq_length: length_,
+                    label_inputs: label_batch,
+                    d_seq_length_word: word_length_,
                     d_word_inputs: dec_word_inp_batch,
-                    d_label_inputs: dec_label_inp_batch,
                     alpha: alpha_v,
                     beta: beta_v
                 }
-                z1a, z1b, zs_sample, z3a, z3b, zg_sample, kzg, kzs, tlb, klw, alpha_, beta_, recl, rec_label, rec_word, lppl, wppl = sess.run(
+                z1a, z1b, zs_sample, z3a, z3b, zg_sample, kzg, kzs, tlb, klw, alpha_, beta_, recl, rec_label, rec_word = sess.run(
                     [
                         Zsent_distribution[0], Zsent_distribution[1],
-                        zsent_sample, Zglobal_distribition[0],
+                        zsent_sample_enc, Zglobal_distribition[0],
                         Zglobal_distribition[1], zglobal_sample,
                         neg_kld_zglobal, neg_kld_zsent, total_lower_bound,
                         kl_term_weight, alpha, beta, rec_loss, label_rec_loss,
-                        word_rec_loss, label_perplexity, word_perplexity
+                        word_rec_loss
                     ],
                     feed_dict=feed)
 
@@ -1094,9 +1046,6 @@ def main(params):
                 all_rl.append(recl)
                 all_lrl.append(rec_label)
                 all_wrl.append(rec_word)
-                all_l_ppl.append(lppl)
-                all_w_ppl.append(wppl)
-
                 mi_s = calc_mi_q(z1a, z1b, zs_sample)
                 mi_g = calc_mi_q(z3a, z3b, zg_sample)
                 # mi_zc_zl = calc_mi_two(z1a, z1b, z3a, z3b, zs_sample,
@@ -1110,14 +1059,13 @@ def main(params):
                 gmi.append(mi_g)
                 tmi.append(mi_s + mi_g)
                 write_lists_to_file('mi_values.txt', smi, gmi, tmi)
-                # print("TLB:", tlb)s
+                print("TLB:", tlb)
                 # print("Debug total_lower_bound:", tlb, "rec_label:", rec_label,
                 #       "rec_word:", rec_word, "kl:", klw, "kl_y:", kzg, "kl_x:",
                 #       kzs, "mig:", mi_g, "mis", mi_s)
                 write_lists_to_file('test_plot.txt', all_alpha,
                                     all_beta, all_tlb, all_kl, all_klzg,
-                                    all_klzs, all_rl, all_lrl, all_wrl,
-                                    all_l_ppl, all_w_ppl)
+                                    all_klzs, all_rl, all_lrl, all_wrl)
 
                 prev_tlb = tlb
                 ## for MI
@@ -1137,9 +1085,11 @@ def main(params):
                         s_idx = val_it * params.batch_size
                         e_idx = (val_it + 1) * params.batch_size
                         word_input = encoder_val_data[s_idx:e_idx]
-                        word_input = zero_pad(word_input, pad)
-                        label_input = val_labels_arr[s_idx:e_idx]
-                        label_input = zero_pad(label_input, pad)
+                        word_length_ = np.array([
+                            len(sent) for sent in word_input
+                        ]).reshape(params.batch_size)
+                        word_input = zero_pad(word_input, sent_pad)
+                        label_input = val_labels[s_idx:e_idx]
 
                         ## batch_size = word_input.shape[0]
                         batch_size = len(word_input)
@@ -1148,13 +1098,13 @@ def main(params):
                         feed = {
                             word_inputs: word_input,
                             label_inputs: label_input,
+                            d_seq_length_word: word_length_,
                         }
 
-                        zs_dist, zs_sample, zg_dist, zg_sample, _, y_pre = sess.run(
+                        zs_dist, zs_sample, zg_dist, zg_sample, = sess.run(
                             [
-                                Zsent_distribution, zsent_sample,
-                                Zglobal_distribition, zglobal_sample,
-                                zsent_state, zglobal_state
+                                Zsent_distribution, zsent_sample_enc,
+                                Zglobal_distribition, zglobal_sample
                             ],
                             feed_dict=feed)
 
@@ -1193,7 +1143,6 @@ def main(params):
 
                     else:
                         decoder_true = False
-                        # if it % 300 == 0 or mi_g < 5.0:
                         if mi_g < 5.0 or mi_s < 5.0:
                            #or (mi_s > mi_s_prev and mi_g > mi_g_prev):
                            mi_g_prev = 0.0
@@ -1227,15 +1176,14 @@ def main(params):
                     mi_s_prev = mi_s
                     mi_g_prev = mi_g
 
-                # if (cur_it % 500 == 0 and cur_it != 0) or klw < 5.0:
-                if cur_it % 100 == 0 or cur_it % num_iters == 0:
+                if cur_it%500==0 or cur_it%num_iters==0:
                     path_to_save = os.path.join(params.MODEL_DIR,
                                                 "vae_lstm_model")
                     # print(path_to_save)
                     model_path_name = saver.save(sess,
                                                  path_to_save,
                                                  global_step=cur_it)
-                    # print(model_path_name)
+                    print(model_path_name)
 
                 ## breaking condition
                 #if klw < 5.0:
@@ -1258,80 +1206,11 @@ def main(params):
 
                     prev_epoch_elbo = cur_epoch_avg_elbo
 
-                    print("tlb:{}, kl_g:{}, kl_s:{}, l_rl:{}, w_rl:{}".format(tlb, -kzg, -kzs, rec_label, rec_word))
-
-                    print("epoch: {} Time Taken: {}".format(current_epoch%num_iters, datetime.datetime.now() - epoch_start_time))
-
-                ###########################################
-                # w_ppl, l_ppl = 0, 0
-                # batch_size = params.batch_size
-                # num_examples = 0
-                # for p_it in range(len(encoder_val_data) // batch_size):
-                #     s_idx = p_it * batch_size
-                #     e_idx = (p_it + 1) * batch_size
-                #     word_input = encoder_val_data[s_idx:e_idx]
-                #     word_input = zero_pad(word_input, pad)
-                #     shifted_word_input = encoder_val_data_shifted[s_idx:e_idx]
-                #     shifted_word_input = zero_pad(shifted_word_input, pad)
-                #     label_input = val_labels_arr[s_idx:e_idx]
-                #     label_input = zero_pad(label_input, pad)
-                #     dec_inp_words = decoder_val_words[s_idx:e_idx]
-                #     dec_inp_words = zero_pad(dec_inp_words, pad)
-                #     dec_inp_labels = decoder_val_labels[s_idx:e_idx]
-                #     dec_inp_labels = zero_pad(dec_inp_labels, pad)
-                #     num_examples += batch_size
-
-                #     _, wp, lp = sess.run(
-                #         [total_lower_bound, word_perplexity, label_perplexity],
-                #         feed_dict={
-                #             word_inputs: word_input,
-                #             label_inputs: label_input,
-                #             d_word_labels: word_input,
-                #             d_label_labels: label_input,
-                #             d_seq_length: length_,
-                #             d_word_inputs: dec_inp_words,
-                #             d_label_inputs: dec_inp_labels,
-                #             alpha: alpha_v,
-                #             beta: beta_v
-                #         }
-                #     )
-
-                #     l_ppl += lp * batch_size
-                #     w_ppl += wp * batch_size
-
-                # l_ppl /= num_examples
-                # w_ppl /= num_examples
-
-                # all_l_ppl.append(l_ppl)
-                # all_w_ppl.append(w_ppl)
-                # write_lists_to_file('test_plot_ppl.txt', all_l_ppl, all_w_ppl)
-
-                # cur_epoch_avg_elbo = float(cur_epoch_elbo_sum) / (num_iters)
-                # print('\navg elbo:', cur_epoch_avg_elbo)
 
 
-                ## in a separate folder for every epoch
-                # path_to_save_e = os.path.join(
-                #     params.MODEL_DIR + '_per_epoch',
-                #     "vae_lstm_model_e" + str(current_epoch)
-                # )
-                # model_path_name = saver.save(
-                #     sess, path_to_save_e, global_step=cur_it
-                # )
-                # write_lists_to_file(
-                #     os.path.join(
-                #         params.MODEL_DIR + '_per_epoch',
-                #         'test_plot_{}.txt'.format(current_epoch)
-                #     ), all_alpha, all_beta, all_tlb, all_rl, all_lrl, all_wrl
-                # )
-
-                # if finish_epoch_loop:
-                #     print('also exiting epoch loop')
-                #     break
+                print("Time Taken:", datetime.datetime.now() - epoch_start_time)
 
             ## save model at end of training
-            path_to_save = os.path.join(params.MODEL_DIR,
-                                                "vae_lstm_model")
             model_path_name = saver.save(sess, path_to_save, global_step=cur_it)
 
 
