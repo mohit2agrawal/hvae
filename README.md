@@ -14,11 +14,21 @@
   - linear increase
   - no beta lag (alpha = beta)
 
-  `python vae_lstm-lstm.py`
+  - for lagging inference scheme
+
+  `python hvae_lagging_inference.py`
+
+  - for gated lagging inference scheme
+
+  `python hvae_gated_lagging_inference.py`
+
+  - for monotonous or cyclical schedules
+
+  `python hvae_cyclic.py`
 
 - options
 
-  `python vae_lstm-lstm.py --fn tanh --cycles 5 --cycle_proportion 0.5 --beta_lag 0.1 --zero_start 0.75`
+  `python vae_cyclic.py --fn tanh --cycles 5 --cycle_proportion 0.5 --beta_lag 0.1 --zero_start 0.75`
   - --fn (scheduling function)
     - linear (default)
     - tanh
@@ -34,10 +44,21 @@
   - --zero_start (proportion of the time period for which the cycle remains at zero)
 
 - sampling
-  by default, both 'biased sampling' and 'no word repetition' are used.
+  by default, none of 'biased sampling' or 'no word repetition' are used.
   The 'no word repetition' is per label per sentence. If all words for a label have appeared in a sentence, we consider that none has occured, so that next word can be sampled.
 
+  - prior sampling
+
   `python simple_sampling.py --num_samples 10000 --ckpt_path models_ckpts_ptb_ner/vae_lstm_model-23300`
+
+  - posterior sampling with only the label mu and logvar from encoder
+
+  `python paraphrasing.py --num_samples 10000 --ckpt_path models_ckpts_ptb_ner/vae_lstm_model-23300`
+
+  - posterior sampling with both the label and sentence mu and logvar from encoder
+
+  `python paraphrasing1.py --num_samples 10000 --ckpt_path models_ckpts_ptb_ner/vae_lstm_model-23300`
+
 
 ## Output
 - Following values will be saved in `test_plot.txt`
@@ -78,7 +99,7 @@
   `python accuracy.py sentences.txt labels.txt test_sents.txt test_labels.txt`
   Train a CRF model to do POS tagging learnt from `sentences.txt` and `labels.txt`
   Then, report accuracy and other metrics on `test_sents.txt` and `test_labels.txt`
-  
+
   **requires sklearn_crfsuite:**
   `pip install sklearn-crfsuite`
 
@@ -88,7 +109,7 @@
   `python accuracy.py labels.txt true_labels.txt`
   - Input: labels.txt and true_labels.txt
   - Output: accuracy score
-  
+
   Get the accuracy score considering `true_labels.txt` as the true value.
 
 - tag.py
@@ -96,10 +117,10 @@
   `python tag.py sentences.txt labels.txt <model.ser.gz>`
   - Input: sentences.txt
   - Output: labels.txt, the NER tags for sentences.txt
-  
+
   Find NER tags using the Stanford model.
   Provide an optional `model.ser.gz` to be used.
-  
+
   NOTE: verify the path to `stanford-ner` in the code
 
 - to_tsv.py
@@ -107,7 +128,7 @@
   `python to_tsv.py sentences.txt labels.txt output.tsv`
   - Input: sentences.txt and labels.txt
   - Output: output.tsv
-  
+
   Convert the `sentences.txt` and `labels.txt` to a single `output.tsv` to be used for training a stanford NER model
 
 - transform.py
@@ -115,10 +136,10 @@
   `python transform.py labels_ner.txt labels_numeric.txt`
   - Input: labels_ner.txt, the labels file with NER word tags like 'PERSON', 'LOCATION'
   - Output: labels_numeric.txt, the labels file with numeric labels (0,1,2,3)
-  
+
   Convert NER word labels to numeric labels according to
   'O': '0', 'LOCATION': '1', 'PERSON': '2', 'ORGANIZATION': '3'
-  
+
   NOTE: This may not be required if using the latest `data.py` and latest `sampling.py`
 
 - verify_lengths.py
