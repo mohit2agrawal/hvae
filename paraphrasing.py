@@ -13,7 +13,7 @@ from tensorflow.python import debug as tf_debug
 from tensorflow.python.util.nest import flatten
 import os
 from tensorflow.python.tools import inspect_checkpoint as chkp
-from hvae_model import encoder, decoder
+from hvae_model1 import encoder, decoder
 
 from tqdm import tqdm
 
@@ -132,9 +132,7 @@ def main(params):
         )
 
         label_cell_state = tf.placeholder(
-            dtype=tf.float64,
-            shape=[1, 2 * params.decoder_hidden],
-            name="label_cell_state"
+            dtype=tf.float64, shape=[1, 2 * 16], name="label_cell_state"
         )
         word_cell_state = tf.placeholder(
             dtype=tf.float64,
@@ -188,7 +186,7 @@ def main(params):
             vect_inputs, label_inputs_1, batch_size, max_sent_len_enc
         )
 
-        word_logits, label_logits, zsent_dec_distribution, _, _, _, zsent_dec_sample_out, w_cell_state, l_cell_state = decoder(
+        _, _, word_logits, label_logits, zsent_dec_distribution, _, _, _, zsent_dec_sample_out, w_cell_state, l_cell_state = decoder(
             d_word_inputs,
             d_label_inputs,
             zglobal_sample,
@@ -228,13 +226,13 @@ def main(params):
                 # traceback.print_exc()
 
             number_of_samples = params.num_samples
-            out_sentence_file = "./generated_sentences.txt"
-            out_labels_file = "./generated_labels.txt"
+            out_sentence_file = "./generated_sentences_posterior.txt"
+            out_labels_file = "./generated_labels_posterior.txt"
             # input_sents_file = "input_sentences.txt"
 
-            biased_sampling = True
+            biased_sampling = False
             no_word_repetition = False
-            PARA_NUM = 5
+            PARA_NUM = 100
 
             with open(out_sentence_file,
                       'w+') as sent_f, open(out_labels_file, 'w+') as label_f:
@@ -246,25 +244,54 @@ def main(params):
                     sent_l_batch = zero_pad(sent_l_batch, max_sent_len_enc)
                     label_l_batch = zero_pad(label_l_batch, max_sent_len_enc)
 
-                    zg_sample = sess.run(
-                        [zglobal_sample_enc],
+                    zg_dist = sess.run(
+                        Zglobal_distribition,
                         feed_dict={
                             word_inputs: sent_l_batch,
                             label_inputs: label_l_batch,
                         }
                     )
-                    zg_sample = zg_sample[0]
+
+                    zg_mu, zg_logvar = zg_dist
+                    zg_mu = zg_mu[0]
+                    zg_logvar = zg_logvar[0]
 
                     ## for biasing in sampling
                     first_word = sent_l_batch[0][0]
                     first_label = label_l_batch[0][0]
 
+                    ## print the sentence being paraphrased
+                    encoder_sent = list(
+                        map(lambda x: data_dict.idx2word[x], sent_l_batch[0])
+                    )
+                    sent_f.write(
+                        ' '.join(
+                            encoder_sent[:encoder_sent.index(data_dict.eos)]
+                        )
+                    )
+                    sent_f.write('\n')
+
+                    encoder_labels = list(
+                        map(
+                            lambda x: data_dict.l_idx2word[x], label_l_batch[0]
+                        )
+                    )
+                    label_f.write(
+                        ' '.join(
+                            encoder_labels[:encoder_labels.index(data_dict.eos)]
+                        )
+                    )
+                    label_f.write('\n')
+
                     for para_num in range(PARA_NUM):
                         ## for decoder init
 
-                        z = zg_sample
+                        eps = np.random.normal(size=np.shape(zg_logvar))
+                        z = zg_mu + np.exp(0.5 * zg_logvar) * eps
+                        z = np.reshape(z, [1, params.latent_size])
+
                         # z = np.random.normal(0, 1, (1, params.latent_size))
-                        lc_state = np.zeros([1, 2 * params.decoder_hidden])
+                        lc_state = np.zeros([1, 2 * 16])
                         wc_state = np.zeros([1, 2 * params.decoder_hidden])
 
                         zs_mu = np.zeros(

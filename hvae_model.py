@@ -517,7 +517,7 @@ def decoder_model(
                 word_embedding_input = word_input_t[i]
 
             word_cell_input = tf.concat(
-                [zc, label_logits_softmax, word_embedding_input], axis=-1
+                [zc, label_cell_state, label_logits_softmax, word_embedding_input], axis=-1
             )
 
             word_cell_output, word_cell_state = word_cell(
@@ -586,9 +586,9 @@ def decoder(
             ## later on, we would like to use the input values
             ## which will be non-zero, and not use the gauss outputs
             indicator = tf.sign(tf.reduce_sum(tf.abs(zsent_dec_sample)))
-            zsent_dec_mu += zs_dec_mu * indicator
-            zsent_dec_logvar += zs_dec_logvar * indicator
-            zsent_dec_sample += zs_dec_sample * indicator
+            zsent_dec_sample += zs_dec_sample * (1-indicator)
+            # zsent_dec_mu += zs_dec_mu * indicator
+            # zsent_dec_logvar += zs_dec_logvar * indicator
 
         zsent_dec_distribution = [zsent_dec_mu, zsent_dec_logvar]
 

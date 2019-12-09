@@ -332,17 +332,16 @@ def train_w2vec(
 ):
     from gensim.models import KeyedVectors, Word2Vec
     embed_fn += '.embed'
-    print(os.path.join(model_path, embed_fn))
+    embed_fp = os.path.join(model_path, embed_fn)
+    print(embed_fp)
     print(
         "Corpus contains {0:,} tokens".format(
             sum(len(sent) for sent in sentences)
         )
     )
-    if os.path.exists(os.path.join(model_path, embed_fn)):
+    if os.path.exists(embed_fp):
         print("Loading existing embeddings file")
-        return KeyedVectors.load_word2vec_format(
-            os.path.join(model_path, embed_fn)
-        )
+        return KeyedVectors.load_word2vec_format(embed_fp)
     # sample parameter-downsampling for frequent words
     w2vec = Word2Vec(
         sg=0,
@@ -362,8 +361,8 @@ def train_w2vec(
     # Save it to model_path
     if not os.path.exists(model_path):
         os.makedirs(model_path)
-    w2vec.wv.save_word2vec_format(os.path.join(model_path, embed_fn))
-    return KeyedVectors.load_word2vec_format(os.path.join(model_path, embed_fn))
+    w2vec.wv.save_word2vec_format(embed_fp)
+    return KeyedVectors.load_word2vec_format(embed_fp)
 
 
 def save_data(sentences, pkl_file, text_file):
@@ -411,13 +410,21 @@ def prepare_data(
 
     model_path = "./trained_embeddings_" + params.name
     filename = os.path.join(model_path, "embedding_file.pkl")
+    label_filename = os.path.join(model_path, "embedding_file.label.pkl")
 
     if os.path.exists(filename):
         with open(filename, 'r') as rf:
             embed_arr = pickle.load(rf)
 
     else:
-        en_align_dictionary = FastVector(vector_file='wiki.en.align.vec')
+
+        vector_file = 'updated.embed.vec.10.epochs'
+        if 'yahoo' in params.name:
+            vector_file = 'updated.yahoo.embed.10epochs.vec'
+        if 'stan' in params.name:
+            vector_file = 'updated.stan.embed.10epochs.vec'
+
+        en_align_dictionary = FastVector(vector_file=vector_file)
         print("loaded the files..")
 
         embed_arr = np.zeros([data_dict.vocab_size, params.embed_size])
@@ -427,8 +434,10 @@ def prepare_data(
                 embed_arr[i] = en_align_dictionary[data_dict.idx2word[i]]
                 # print(str(i), "english")
             except:
-                embed_arr[i] = en_align_dictionary["unk"]
-                print(str(i), "unk")
+                embed_arr[i] = en_align_dictionary["<UNK>"]
+                print(
+                    i, data_dict.idx2word[i], ": set to embedding of \"<UNK>\""
+                )
 
         print("Embedding created")
         if not os.path.exists(model_path):
@@ -436,6 +445,31 @@ def prepare_data(
 
         with open(filename, 'w') as wf:
             pickle.dump(embed_arr, wf)
+
+    # if os.path.exists(label_filename):
+    #     with open(label_filename, 'r') as rf:
+    #         label_embed_arr = pickle.load(rf)
+
+    # else:
+    #     label_en_align_dictionary = FastVector(vector_file='w2v.labels.embed')
+    #     print("loaded the files..")
+
+    #     label_embed_arr = np.zeros([data_dict.label_vocab_size, 16])
+    #     for i in range(1, label_embed_arr.shape[0]):
+    #         # print(i)
+    #         try:
+    #             label_embed_arr[i] = label_en_align_dictionary[data_dict.l_idx2word[i]]
+    #             # print(str(i), "english")
+    #         except:
+    #             label_embed_arr[i] = label_en_align_dictionary["<UNK>"]
+    #             print(i, data_dict.l_idx2word[i], ": set to embedding of \"<UNK>\"")
+
+    #     print("Embedding created")
+    #     if not os.path.exists(model_path):
+    #         os.makedirs(model_path)
+
+    #     with open(label_filename, 'w') as wf:
+    #         pickle.dump(label_embed_arr, wf)
 
     # if params.pre_trained_embed:
     #     w2_vec = train_w2vec(params.input, params.embed_size,
@@ -465,7 +499,8 @@ def prepare_data(
 
     decoder_val_data = [
         [data_dict.word2idx[word] for word in sent[:-1]]
-        for sent in data_dict.sentences if len(sent) < params.sent_max_size - 2
+        for sent in data_dict.val_sentences
+        if len(sent) < params.sent_max_size - 2
     ]
 
     encoder_val_data = [
