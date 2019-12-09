@@ -117,9 +117,8 @@ def encoder(encoder_input, label_input, batch_size, len_word, len_label):
         )
         Zsent_distribution = [zsent_mu, zsent_logvar]
 
-        gauss_input = tf.concat([zglobal_pre_out, zsent_sample], -1)
         zglobal_mu, zglobal_logvar, zglobal_sample = gauss_layer(
-            gauss_input, params.latent_size, scope="label"
+            zglobal_pre_out, params.latent_size, scope="label"
         )
         Zglobal_distribition = [zglobal_mu, zglobal_logvar]
 
@@ -262,6 +261,7 @@ def decoder(
     word_input,
     label_input,
     z_global_sample,
+    z_sent_sample,
     batch_size,
     word_vocab_size,
     label_vocab_size,
@@ -269,34 +269,18 @@ def decoder(
     max_len_label,
     word_embed,
     label_embed,
-    z_sent_sample=None,
     gen_mode=False,
     label_cell_state=None,
     word_cell_state=None
 ):
     with tf.variable_scope("decoder") as sc:
-        Zglobal_dec_distribution = [
-            tf.cast(0, dtype=tf.float64),
-            tf.cast(1.0, dtype=tf.float64)
-        ]
-        # Zsent_dec_distribution = [0.0, 1.0]
-
-        zs_dec_mu, zs_dec_logvar, zs_dec_sample = gauss_layer(
-            z_global_sample, params.latent_size, scope="word"
-        )
-        # if zsent_dec_sample is None:
-        if not gen_mode:  ## training mode
-            zsent_dec_sample = z_sent_sample
-        else:
-            indicator = tf.sign(tf.reduce_sum(tf.abs(z_sent_sample)))
-            zsent_dec_sample = z_sent_sample + zs_dec_sample * (1 - indicator)
-        Zsent_dec_distribution = [zs_dec_mu, zs_dec_logvar]
-
+        Zglobal_dec_distribution = [0.0, 1.0]
+        Zsent_dec_distribution = [0.0, 1.0]
         decoder_output = decoder_model(
             word_input,
             label_input,
             z_global_sample,
-            zsent_dec_sample,
+            z_sent_sample,
             batch_size,
             label_vocab_size,
             word_vocab_size,

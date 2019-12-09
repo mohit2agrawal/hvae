@@ -11,7 +11,7 @@ from tensorflow.python.util.nest import flatten
 import utils.data as data_
 import utils.label_data as label_data_
 import utils.model as model
-from sivae_model_mod import decoder, encoder
+from sivae_model import decoder, encoder
 from utils import parameters
 from utils.beam_search import beam_search
 from utils.ptb import reader
@@ -20,6 +20,7 @@ from utils.schedules import scheduler
 from tqdm import tqdm
 import pickle
 import traceback
+
 
 class PTBInput(object):
     """The input data."""
@@ -37,8 +38,8 @@ def kld(p_mu, p_logvar, q_mu, q_logvar):
     compute D_KL(p || q) of two Gaussians
     """
     return -0.5 * (
-        1 + p_logvar - q_logvar -
-        (tf.square(p_mu - q_mu) + tf.exp(p_logvar)) / tf.exp(tf.cast(q_logvar, tf.float64))
+        1 + p_logvar - q_logvar - (tf.square(p_mu - q_mu) + tf.exp(p_logvar)) /
+        tf.exp(tf.cast(q_logvar, tf.float64))
     )
 
 
@@ -71,7 +72,7 @@ def main(params):
     # max_len_label = max(max(map(len, labels)), max(map(len, val_labels)))
     max_len_word = max(map(len, data))
     max_len_label = max(map(len, labels))
-    print('max len word, label:',max_len_word, max_len_label)
+    print('max len word, label:', max_len_word, max_len_label)
 
     word_vocab_size = data_dict.vocab_size
     label_vocab_size = label_dict.vocab_size
@@ -135,13 +136,15 @@ def main(params):
         d_seq_length_label = tf.placeholder(shape=[None], dtype=tf.float64)
         d_seq_length_word = tf.placeholder(shape=[None], dtype=tf.float64)
 
-        Zsent_distribution, zsent_sample_enc, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
-            vect_inputs, label_inputs_1, params.batch_size, d_seq_length_word, d_seq_length_label
+        Zsent_distribution, zsent_sample, Zglobal_distribition, zglobal_sample, zsent_state, zglobal_state = encoder(
+            vect_inputs, label_inputs_1, params.batch_size, d_seq_length_word,
+            d_seq_length_label
         )
         word_logits, label_logits, Zsent_dec_distribution, Zglobal_dec_distribution, _, _, dec_word_states, dec_label_states = decoder(
             d_word_inputs,
             d_label_inputs,
             zglobal_sample,
+            zsent_sample,
             params.batch_size,
             word_vocab_size,
             label_vocab_size,
@@ -149,7 +152,6 @@ def main(params):
             max_len_label,
             word_embedding,
             label_embedding,
-            z_sent_sample=zsent_sample_enc
         )
 
         neg_kld_zsent = -1 * tf.reduce_mean(
@@ -215,6 +217,7 @@ def main(params):
 
         ## reshape to get back per sent
         l_softmax_batch = tf.reshape(l_softmax_single, tf.shape(d_label_labels))
+        ## mask to remove effect of padding
         l_sent_mask = tf.sign(tf.cast(d_label_labels_flat, dtype=tf.float64))
         l_sent_mask = tf.reshape(l_sent_mask, tf.shape(d_label_labels))
         l_softmax_batch_masked = tf.multiply(
@@ -258,7 +261,6 @@ def main(params):
         word_rec_loss = -tf.reduce_mean(w_softmax_mean_per_sent)
         word_perplexity = tf.exp(-tf.reduce_mean(w_softmax_mean_per_sent_seq))
 
-
         rec_loss = word_rec_loss + label_rec_loss
 
         #anneal = tf.placeholder(tf.float64)
@@ -277,12 +279,13 @@ def main(params):
                          - tf.multiply(tf.cast(beta, dtype=tf.float64), tf.cast(neg_kld_zglobal, dtype=tf.float64))
 
         total_lower_bound = rec_loss + kl_term_weight
-        # total_lower_bound = kl_term_weight
 
         gradients = tf.gradients(total_lower_bound, tf.trainable_variables())
         clipped_grad, _ = tf.clip_by_global_norm(gradients, 5)
         opt = tf.train.AdamOptimizer(learning_rate=params.learning_rate)
-        # opt = tf.train.GradientDescentOptimizer(learning_rate=params.learning_rate)
+        # opt = tf.train.GradientDescentOptimizer(
+        #     learning_rate=params.learning_rate
+        # )
         # optimize = opt.apply_gradients(zip(gradients, tf.trainable_variables()))
         optimize = opt.apply_gradients(
             zip(clipped_grad, tf.trainable_variables())
@@ -315,16 +318,16 @@ def main(params):
 
             ## Load saved state
             try:
-                 path = params.ckpt_path
-                 if path:
-                     print("***Loading state from:",path)
-                     # chkp.print_tensors_in_checkpoint_file(path, tensor_name='', all_tensors=True)
-                     saver.restore(sess, path)
-                     print("******* Model Restored ***********")
+                path = params.ckpt_path
+                if path:
+                    print("***Loading state from:", path)
+                    # chkp.print_tensors_in_checkpoint_file(path, tensor_name='', all_tensors=True)
+                    saver.restore(sess, path)
+                    print("******* Model Restored ***********")
             except:
-                 print("-----exception occurred--------")
-                 traceback.print_exc()
-                 exit()
+                print("-----exception occurred--------")
+                traceback.print_exc()
+                exit()
 
             total_parameters = 0
             #print_vars("trainable variables")
@@ -368,16 +371,18 @@ def main(params):
 
             prev_epoch_elbo = cur_epoch_avg_elbo = 0
 
-            delta_alpha = (1*0.5)/num_iters
-            alpha_v = beta_v = -delta_alpha
-            kzs=kzg=-1.0
+            alpha_v = beta_v = -(1 * 0.5) / num_iters
 
             current_epoch = 0
             # while True:
             for e in range(params.num_epochs):
                 current_epoch += 1
                 epoch_start_time = datetime.datetime.now()
-                print("Epoch: {} started at: {}".format(current_epoch, epoch_start_time))
+                print(
+                    "Epoch: {} started at: {}".format(
+                        current_epoch, epoch_start_time
+                    )
+                )
 
                 # prev_epoch_elbo = cur_epoch_avg_elbo
                 # cur_epoch_elbo_sum = 0
@@ -394,9 +399,9 @@ def main(params):
                     # beta_v, alpha_v = schedule(cur_it)
                     # beta_v = 1
 
-                    alpha_v += delta_alpha
+                    alpha_v += (1 * 0.5) / num_iters
                     alpha_v = min(1, alpha_v)
-                    if -kzs < 0.8 or -kzg < 0.8:
+                    if cur_it > 0 and (-kzs < 0.8 or -kzg < 0.8):
                         alpha_v = 0
 
                     beta_v = alpha_v
@@ -412,16 +417,22 @@ def main(params):
                     dec_label_inp_batch = labels[indices]
 
                     # not optimal!!
-                    word_length_ = np.array([len(sent) for sent in sent_inp_batch]
-                                       ).reshape(params.batch_size)
-                    label_length_ = np.array([len(sent) for sent in label_inp_batch]
-                                       ).reshape(params.batch_size)
+                    word_length_ = np.array(
+                        [len(sent) for sent in sent_inp_batch]
+                    ).reshape(params.batch_size)
+                    label_length_ = np.array(
+                        [len(sent) for sent in label_inp_batch]
+                    ).reshape(params.batch_size)
 
                     # prepare encoder and decoder inputs to feed
                     sent_inp_batch = zero_pad(sent_inp_batch, max_len_word)
                     label_inp_batch = zero_pad(label_inp_batch, max_len_label)
-                    dec_word_inp_batch = zero_pad(dec_word_inp_batch, max_len_word)
-                    dec_label_inp_batch = zero_pad(dec_label_inp_batch, max_len_label)
+                    dec_word_inp_batch = zero_pad(
+                        dec_word_inp_batch, max_len_word
+                    )
+                    dec_label_inp_batch = zero_pad(
+                        dec_label_inp_batch, max_len_label
+                    )
 
                     feed = {
                         word_inputs: sent_inp_batch,
@@ -438,9 +449,9 @@ def main(params):
 
                     kzg, kzs, tlb, klw, o, rl, lrl, wrl = sess.run(
                         [
-                            neg_kld_zglobal,
-                            neg_kld_zsent, total_lower_bound, kl_term_weight,
-                            optimize, rec_loss, label_rec_loss, word_rec_loss
+                            neg_kld_zglobal, neg_kld_zsent, total_lower_bound,
+                            kl_term_weight, optimize, rec_loss, label_rec_loss,
+                            word_rec_loss
                         ],
                         feed_dict=feed
                     )
@@ -522,7 +533,6 @@ def main(params):
                 # all_w_ppl.append(w_ppl)
                 # write_lists_to_file('test_plot_ppl.txt', all_l_ppl, all_w_ppl)
 
-
                 # cur_epoch_avg_elbo = float(cur_epoch_elbo_sum) / (num_iters)
                 # print('\navg elbo:', cur_epoch_avg_elbo)
 
@@ -533,7 +543,6 @@ def main(params):
                 #     ## stopping condition
                 #     if perct_change <= 0.01:
                 #         break
-
 
                 print("Time Taken:", datetime.datetime.now() - epoch_start_time)
 
