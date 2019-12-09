@@ -5,7 +5,11 @@ import numpy as np
 filename = "test_plot.txt"
 if len(sys.argv) > 1:
     filename = sys.argv[1]
-out_graph_name = filename.replace(".txt", ".png")
+if filename.endswith('txt'):
+    out_graph_name = filename.replace(".txt", ".png")
+else:
+    out_graph_name = filename + ".png"
+
 if len(sys.argv) > 2:
     out_graph_name = sys.argv[2]
 
@@ -48,12 +52,13 @@ plt.figure(figsize=(11.69, 8.27))
 
 ax = plt.subplot(4, 1, 1)
 # ax.set_ylim([0, max(tlb_arr)])
-ax.set_ylim([-0.05, 30])
-plt.plot(30 * .95 * alpha_arr, color="lightskyblue", label="alpha")
-plt.plot(30 * .95 * beta_arr, color="lightcoral", label="beta")
+# ax.set_ylim([-0.05, 30])
+# plt.plot(30 * .95 * alpha_arr, color="lightskyblue", label="alpha")
+# plt.plot(30 * .95 * beta_arr, color="lightcoral", label="beta")
 plt.plot(tlb_arr, color="blue", label="Total lower bound")
 plt.ylabel("ELBO")
 
+# ppl = [np.exp(x / 25.0) for x in tlb_arr]
 ax = plt.subplot(4, 2, 3)
 # ax.set_ylim([-0.05, max(klw_arr)])
 ax.set_ylim([-0.05, 10])
@@ -63,36 +68,49 @@ plt.plot(klw_arr, color="g", label="KL")
 plt.ylabel("weighted KL")
 
 ax = plt.subplot(4, 2, 5)
-# ax.set_ylim([-0.05, max(kld_zg_arr)])
-ax.set_ylim([-0.05, 15])
-plt.plot(15 * .95 * alpha_arr, color="lightskyblue", label="alpha")
-plt.plot(15 * .95 * beta_arr, color="lightcoral", label="beta")
+ax.set_ylim([-0.05, max(kld_zg_arr)])
+plt.plot(max(kld_zg_arr) * .95 * alpha_arr, color="lightskyblue", label="alpha")
+plt.plot(max(kld_zg_arr) * .95 * beta_arr, color="lightcoral", label="beta")
+# ax.set_ylim([-0.05, 15])
+# plt.plot(15 * .95 * alpha_arr, color="lightskyblue", label="alpha")
+# plt.plot(15 * .95 * beta_arr, color="lightcoral", label="beta")
 plt.plot(kld_zg_arr, color="red", label="kld_zl")
 # plt.legend()
 plt.ylabel("KL zl")
 
 ax = plt.subplot(4, 2, 7)
-# ax.set_ylim([-0.05, max(kld_zs_arr)])
-ax.set_ylim([-0.05, 15])
-plt.plot(15 * .95 * alpha_arr, color="lightskyblue", label="alpha")
-plt.plot(15 * .95 * beta_arr, color="lightcoral", label="beta")
+ax.set_ylim([-0.05, max(kld_zs_arr)])
+plt.plot(max(kld_zs_arr) * .95 * alpha_arr, color="lightskyblue", label="alpha")
+plt.plot(max(kld_zs_arr) * .95 * beta_arr, color="lightcoral", label="beta")
+# ax.set_ylim([-0.05, 15])
+# plt.plot(15 * .95 * alpha_arr, color="lightskyblue", label="alpha")
+# plt.plot(15 * .95 * beta_arr, color="lightcoral", label="beta")
 plt.plot(kld_zs_arr, color="blue", label="kld_zc")
 # plt.legend()
 plt.xlabel("Iterations")
 plt.ylabel("KL zc")
 
 ax = plt.subplot(4, 2, 4)
-ax.set_ylim([0, 15])
+# ax = plt.subplot(4, 1, 2)
+# ax.set_ylim([0, 15])
 plt.plot(rl_arr, color="green", label="rl")
 plt.ylabel("reconstruction loss")
 
 ax = plt.subplot(4, 2, 6)
-ax.set_ylim([0, 4])
+# ax = plt.subplot(5, 1, 2)
+# ax.set_ylim([0, 4])
 plt.plot(lrl_arr, color="green", label="lrl")
 plt.ylabel("label rl")
 
+lppl = [np.exp(x / 25.0) for x in lrl_arr]
+# ax = plt.subplot(5, 1, 3)
+# # ax.set_ylim([0, 40])
+# plt.plot(lppl, color="green", label="lppl")
+# plt.ylabel("label perplexity")
+
 ax = plt.subplot(4, 2, 8)
-ax.set_ylim([0, 10])
+# ax = plt.subplot(5, 1, 4)
+# ax.set_ylim([0, 10])
 plt.plot(wrl_arr, color="green", label="wrl")
 plt.ylabel("word rl")
 

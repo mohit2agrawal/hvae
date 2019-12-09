@@ -232,7 +232,12 @@ def main(params):
         )
 
         saver = tf.train.Saver(max_to_keep=10)
-        config = tf.ConfigProto(device_count={'GPU': 0})
+        # config = tf.ConfigProto(device_count={'GPU': 0})
+
+        # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
+        gpu_options = tf.GPUOptions(allow_growth=True)
+        config=tf.ConfigProto(gpu_options=gpu_options)
+
         with tf.Session(config=config) as sess:
             print("*********")
             sess.run(
@@ -307,9 +312,18 @@ def main(params):
             decoder_labels = np.array(decoder_labels)
             decoder_val_labels = np.array(decoder_val_labels)
             decoder_val_words = np.array(decoder_val_words)
-            for e in range(params.num_epochs):
+
+            prev_epoch_elbo = cur_epoch_avg_elbo = 0
+            # for e in range(params.num_epochs):
+            current_epoch = 0
+            while True:
+                current_epoch += 1
                 epoch_start_time = datetime.datetime.now()
-                print("Epoch: {}/{} started at: {}".format(e, params.num_epochs, epoch_start_time))
+                # print("Epoch: {}/{} started at: {}".format(e, params.num_epochs, epoch_start_time))
+                print("Epoch: {} started at: {}".format(current_epoch, epoch_start_time))
+
+                prev_epoch_elbo = cur_epoch_avg_elbo
+                cur_epoch_elbo_sum = 0
 
                 ## alpha, beta schedule
                 # if cur_it >= 8000:
@@ -408,6 +422,8 @@ def main(params):
                         )
                         # print(model_path_name)
 
+                cur_epoch_elbo_sum += tlb
+
                 w_ppl, l_ppl = 0, 0
                 batch_size = params.batch_size
                 num_examples = 0
@@ -434,7 +450,7 @@ def main(params):
                         feed_dict={
                             word_inputs: word_input,
                             label_inputs: label_input,
-                            d_word_labels: shifted_word_input,
+                            d_word_labels: word_input,
                             d_label_labels: label_input,
                             d_seq_length: length_,
                             d_word_inputs: dec_inp_words,
@@ -453,7 +469,21 @@ def main(params):
                 all_l_ppl.append(l_ppl)
                 all_w_ppl.append(w_ppl)
                 write_lists_to_file('test_plot_ppl.txt', all_l_ppl, all_w_ppl)
+
+                cur_epoch_avg_elbo = float(cur_epoch_elbo_sum) / (num_iters)
+                print('\navg elbo:', cur_epoch_avg_elbo)
+
+                if current_epoch > 1:
+                    print('prev elbo:', prev_epoch_elbo)
+                    change_ratio = float(prev_epoch_elbo - cur_epoch_avg_elbo)/prev_epoch_elbo
+                    print('change ratio:', change_ratio)
+                    ## stopping condition
+                    if change_ratio <= 0.01:
+                        break
+
+
                 print("Time Taken:", datetime.datetime.now() - epoch_start_time)
+
 
             ## save model at end of training
             model_path_name = saver.save(sess, path_to_save, global_step=cur_it)

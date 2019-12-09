@@ -96,7 +96,7 @@ def test():
     mpl.use("Agg")
     import matplotlib.pyplot as plt
 
-    n = 20000
+    n = 15000
     # sch = scheduler('cosine', n, 3, 0.75, 0)
     # cos = [sch(i)[0] for i in range(n)]
     # sch = scheduler('tanh', n, 3, 0.75, 0)
@@ -104,7 +104,7 @@ def test():
     # plt.plot(cos, color="blue", label="cos")
     # plt.plot(tan, color="red", label="tan")
 
-    sch = scheduler('tanh', n, 5, 1, 0.15, 0)
+    sch = scheduler('tanh', n, 2, 1, 0.15, 0.75)
     alpha = []
     beta = []
     for i in range(n):

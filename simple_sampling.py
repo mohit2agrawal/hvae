@@ -13,7 +13,7 @@ from tensorflow.python import debug as tf_debug
 from tensorflow.python.util.nest import flatten
 import os
 from tensorflow.python.tools import inspect_checkpoint as chkp
-from hvae_model import encoder, decoder
+from hvae_model1 import encoder, decoder
 
 from tqdm import tqdm
 
@@ -81,7 +81,7 @@ def main(params):
     ## one sentence at a time
     batch_size = 1
 
-    word_vocab_size = max(data_dict.sizes)
+    word_vocab_size = data_dict.vocab_size
     label_vocab_size = data_dict.label_vocab_size
     labels_set = data_dict.labels_set
 
@@ -118,9 +118,7 @@ def main(params):
         )
 
         label_cell_state = tf.placeholder(
-            dtype=tf.float64,
-            shape=[1, 2 * params.decoder_hidden],
-            name="label_cell_state"
+            dtype=tf.float64, shape=[1, 2 * 16], name="label_cell_state"
         )
         word_cell_state = tf.placeholder(
             dtype=tf.float64,
@@ -156,7 +154,7 @@ def main(params):
             dtype=tf.float64
         )
 
-        word_logits, label_logits, zsent_dec_distribution, _, _, _, zsent_dec_sample_out, w_cell_state, l_cell_state = decoder(
+        _, _, word_logits, label_logits, zsent_dec_distribution, _, _, _, zsent_dec_sample_out, w_cell_state, l_cell_state = decoder(
             d_word_inputs,
             d_label_inputs,
             zglobal_sample,
@@ -196,18 +194,18 @@ def main(params):
                 # traceback.print_exc()
 
             number_of_samples = params.num_samples
-            out_sentence_file = "./generated_sentences.txt"
-            out_labels_file = "./generated_labels.txt"
+            out_sentence_file = "./generated_sentences_prior.txt"
+            out_labels_file = "./generated_labels_prior.txt"
 
-            biased_sampling = True
-            no_word_repetition = True
+            biased_sampling = False
+            no_word_repetition = False
 
             with open(out_sentence_file,
                       'w+') as sent_f, open(out_labels_file, 'w+') as label_f:
 
                 for num in tqdm(range(number_of_samples)):
                     z = np.random.normal(0, 1, (1, params.latent_size))
-                    lc_state = np.zeros([1, 2 * params.decoder_hidden])
+                    lc_state = np.zeros([1, 2 * 16])
                     wc_state = np.zeros([1, 2 * params.decoder_hidden])
 
                     zs_mu = np.zeros([1, params.latent_size], dtype=np.float64)
@@ -296,27 +294,29 @@ def main(params):
                             ## labels_set index
                             ls_idx = labels_set.index(pred_label)
 
-                            reqd_logit = w_logit[:sizes[ls_idx + 1]]
-                            if no_word_repetition:
-                                reqd_logit *= np.ones(sizes[ls_idx + 1]) \
-                                               - appeared_words[pred_label]
+                            # if no_word_repetition:
+                            #     reqd_logit *= np.ones(sizes[ls_idx + 1]) \
+                            #                    - appeared_words[pred_label]
                             ## sample the word
+
                             pred_word_idx = np.random.choice(
                                 range(ranges[ls_idx], ranges[ls_idx + 1]),
                                 size=1,
-                                p=softmax(reqd_logit)
+                                p=softmax(
+                                    w_logit[ranges[ls_idx]:ranges[ls_idx + 1]]
+                                )
                             )[0]
                             pred_word = data_dict.idx2word[pred_word_idx]
 
-                            if no_word_repetition:
-                                shifted_idx = pred_word_idx - ranges[ls_idx]
-                                appeared_words[pred_label][shifted_idx] = 1
-                                ## in case all have appeared, mark all as not appeared
-                                if not any(appeared_words[pred_label] == 0):
-                                    appeared_words[pred_label][:] = 0
-                                # if sum(appeared_words[pred_label] == 1
-                                #        ) == len(appeared_words[pred_label]):
-                                #     appeared_words[pred_label][:] = 0
+                            # if no_word_repetition:
+                            #     shifted_idx = pred_word_idx - ranges[ls_idx]
+                            #     appeared_words[pred_label][shifted_idx] = 1
+                            #     ## in case all have appeared, mark all as not appeared
+                            #     if not any(appeared_words[pred_label] == 0):
+                            #         appeared_words[pred_label][:] = 0
+                            #     # if sum(appeared_words[pred_label] == 1
+                            #     #        ) == len(appeared_words[pred_label]):
+                            #     #     appeared_words[pred_label][:] = 0
 
                         if pred_label == data_dict.eos:
                             break
