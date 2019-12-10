@@ -18,6 +18,9 @@
 
 `python sivae_mod.py`
 
+- for SiVAE-i implementation
+
+`python sivae.py`
 
 - Pharaphrase generation
 
