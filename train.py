@@ -58,6 +58,9 @@ def main(params):
 
     word_vocab_size = len(word2idx.keys())
 
+    ## TODO
+    ## num_buckets
+
     topic_beta_initial = (1 / word_vocab_size) * np.ones(
         [params.batch_size, params.num_topics, word_vocab_size]
     )
@@ -107,7 +110,9 @@ def main(params):
         doc_mu, doc_logvar, doc_sample = model.doc_encoder(doc_bow)
 
         topic_beta_sm = tf.nn.softmax(topic_beta)
-        topic_dist, decoded_doc = model.doc_decoder(doc_sample, topic_beta_sm)
+        topic_dist, topic_word_probs = model.doc_decoder(
+            doc_sample, topic_beta_sm, word_vocab_size, num_buckets
+        )
 
         dec_z_mu, dec_z_logvar, dec_z_sample = model.get_word_priors(
             topic_beta_sm, topic_dist
@@ -153,14 +158,38 @@ def main(params):
             )
         )
 
-        ## TODO: doc reconstruction loss
-        doc_recons_loss = 0
+        ## for doc reconstruction loss ##
+
+        ## bs x 1 x T
+        topic_dist_expanded = tf.expand_dims(topic_dist, axis=1)
+        ## bs x T x (vocab_size x num_buckets)
+        topic_word_probs_flat = tf.reshape(
+            topic_word_probs, [params.batch_size, params.num_topics, -1]
+        )
+        ## weighted average over topics
+        topic_word_probs_flat_avg = tf.squeeze(
+            tf.matmul(topic_dist_expanded, topic_word_probs_flat)
+        )
+        ## batch_size x vocab_size x num_buckets
+        topic_word_probs_avg = tf.reshape(
+            topic_word_probs_flat_avg,
+            [params.batch_size, word_vocab_size, num_buckets]
+        )
+        ## batch_size x vocab_size x num_buckets
+        doc_bow_onehot = tf.one_hot(doc_bow, depth=num_buckets)
+        ## batch_size x vocab_size
+        doc_recons_loss_by_word = tf.reduce_sum(
+            topic_word_probs_avg * doc_bow_onehot, axis=-1
+        )
+        ## 0<x<1, log(x) < 0 , therefore, negative log
+        doc_recons_loss_by_word_log = -tf.log(doc_recons_loss_by_word)
+        doc_recons_loss = tf.reduce_mean(doc_recons_loss_by_word_log)
 
         loss_topic = doc_recons_loss - kl_topic
 
-        total_lower_bound = loss_seq + loss_topic
+        total_loss = loss_seq + loss_topic
 
-        gradients = tf.gradients(total_lower_bound, tf.trainable_variables())
+        gradients = tf.gradients(total_loss, tf.trainable_variables())
         clipped_grad, _ = tf.clip_by_global_norm(gradients, 5)
         opt = tf.train.AdamOptimizer(learning_rate=params.learning_rate)
         optimize = opt.apply_gradients(

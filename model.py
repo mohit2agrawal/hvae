@@ -221,30 +221,47 @@ def doc_encoder(doc_bow):
     return doc_mu, doc_logvar, doc_sample
 
 
-def doc_decoder(doc_sample, topic_word_dist):
+def doc_decoder(doc_sample, topic_word_dist, word_vocab_size, num_buckets):
 
-    ## TODO: Linear Transformation on topic_sample
+    ## Linear Transformation on doc_sample
     topic_dist = fully_connected(
         doc_sample,
-        params.ntm_hidden,
+        params.num_topics,
         activation_fn=tf.nn.relu,
         weights_initializer=xavier_initializer(),
         biases_initializer=tf.zeros_initializer(),
     )
     topic_dist_sm = tf.nn.softmax(topic_dist)
 
-    ## T: num_topics
-    ## D: vocab_size
-    ## topic_word_dist: bs x T x D
-    ## topic_dist_sm: bs x T
-    ## want, decoded_doc: bs x D
+    # ## T: num_topics
+    # ## D: vocab_size
+    # ## topic_word_dist: bs x T x D
+    # ## topic_dist_sm: bs x T
+    # ## want, decoded_doc: bs x D
 
-    ## bs x 1 x T
-    topic_dist_expanded = tf.expand_dims(topic_dist_sm, axis=1)
-    ## bs x 1 x D -> squeeze -> bs x D
-    decoded_doc = tf.squeeze(tf.matmul(topic_dist_expanded, topic_word_dist))
+    # ## bs x 1 x T
+    # topic_dist_expanded = tf.expand_dims(topic_dist_sm, axis=1)
+    # ## bs x 1 x D -> squeeze -> bs x D
+    # decoded_doc = tf.squeeze(tf.matmul(topic_dist_expanded, topic_word_dist))
 
-    return topic_dist_sm, decoded_doc
+    all_word_probs = []
+    for i in range(params.num_topics):
+        word_logits = fully_connected(
+            topic_word_dist[:, i, :],
+            word_vocab_size * num_buckets,
+            activation_fn=tf.nn.relu,
+            weights_initializer=xavier_initializer(),
+            biases_initializer=tf.zeros_initializer(),
+        )
+        all_word_probs.append(
+            tf.nn.softmax(
+                tf.reshape(word_logits, [-1, word_vocab_size, num_buckets])
+            )
+        )
+    ## batch_size x num_topics x word_vocab_size x num_buckets
+    topic_word_probs = tf.stack(all_word_probs, axis=1)
+
+    return topic_dist_sm, topic_word_probs
 
 
 def get_word_priors(topic_word_dist, topic_dist):
