@@ -12,14 +12,16 @@ def float_limited(x):
 
 class Parameters():
     # general parameters
+    num_topics = 10
+    ntm_hidden = 256
     anneal_value = 1
     debug = True
     # name = "rVACS_kl"
-    name = "yahoo_pos"
+    name = "imdb"
     num_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 150
-    num_epochs = 50 * 312  ## for ours epoch = iters
+    num_epochs = 50  ## for ours epoch = iters
     learning_rate = 0.0005
     batch_size = 32
     # for decoding
@@ -30,14 +32,14 @@ class Parameters():
     beam_size = 2
     # encoder
     rnn_layers = 1
-    encoder_hidden = 600  # std=191, inputless_dec=350
+    encoder_hidden = 128  # std=191, inputless_dec=350
     encode = 'hw'  # 'hw' or 'mlp'
     # highway networks
     keep_rate = 1.0  # --------------------------------------------------->
     highway_lc = 1  # ------------------------------------------------->
     highway_ls = 600
     # decoder
-    decoder_hidden = 600  # ----------------------------------------------------->modify param
+    decoder_hidden = 128  # ----------------------------------------------------->modify param
     decoder_rnn_layers = 1
     dec_keep_rate = 0.62
     decode = 'hw'  # can use 'hw', 'concat', 'mlp'

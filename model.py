@@ -63,7 +63,7 @@ def gauss_layer(inp, dim, mu_nl=None, logvar_nl=None, scope=None):
         return mu, logvar, sample
 
 
-def word_encoder(word_input, batch_size, len_word):
+def word_encoder(word_input, seq_len):
 
     with tf.variable_scope("word"):
         ## LSTM cells
@@ -85,32 +85,29 @@ def word_encoder(word_input, batch_size, len_word):
             word_cell_fw,
             word_cell_bw,
             word_input,
-            sequence_length=len_word,
+            sequence_length=seq_len,
             dtype=tf.float64
         )
 
-    return word_output_states
-    # return tf.concat(word_output_states, -1)
+    return tf.concat(word_output_states, -1)
 
 
 def encoder(encoder_input, batch_size, seq_len):
     with tf.variable_scope("encoder"):
-        wc_state = word_encoder(
-            encoder_input, batch_size, tf.cast(seq_len, tf.int64)
-        )
+        wc_state = word_encoder(encoder_input, tf.cast(seq_len, tf.int64))
 
         zsent_mu, zsent_logvar, zsent_sample = gauss_layer(
             wc_state, params.num_topics * params.latent_size, scope="word"
         )
         # bs x T*LS
-        zsent_mu = zsent_mu.reshape(
-            batch_size, params.num_topics, params.latent_size
+        zsent_mu = tf.reshape(
+            zsent_mu, [batch_size, params.num_topics, params.latent_size]
         )
-        zsent_logvar = zsent_logvar.reshape(
-            batch_size, params.num_topics, params.latent_size
+        zsent_logvar = tf.reshape(
+            zsent_logvar, [batch_size, params.num_topics, params.latent_size]
         )
-        zsent_sample = zsent_sample.reshape(
-            batch_size, params.num_topics, params.latent_size
+        zsent_sample = tf.reshape(
+            zsent_sample, [batch_size, params.num_topics, params.latent_size]
         )
 
         # bs x T
@@ -121,12 +118,15 @@ def encoder(encoder_input, batch_size, seq_len):
             weights_initializer=xavier_initializer(),
             biases_initializer=tf.zeros_initializer(),
         )
+        ## batch_size x num_topics
         enc_topic_dist = tf.nn.softmax(enc_topic_dist)
 
         # ## sum(t_i x mu_i)
         # zsent_mu = tf.matmul(enc_topic_dist, zsent_mu)
         # zsent_logvar = tf.matmul(enc_topic_dist, zsent_logvar)
-        zsent_sample = tf.matmul(enc_topic_dist, zsent_sample)
+        zsent_sample = tf.squeeze(
+            tf.matmul(tf.expand_dims(enc_topic_dist, axis=1), zsent_sample)
+        )
 
         # Zsent_distribution = [zsent_mu, zsent_logvar]
         return zsent_mu, zsent_logvar, zsent_sample, enc_topic_dist
@@ -206,11 +206,18 @@ def two_layer_mlp(inputs, hidden_units_1, hidden_units_2, activation_fn=None):
 
 
 def doc_encoder(doc_bow):
+    doc_bow_f = tf.cast(doc_bow, dtype=tf.float64)
     doc_mu = two_layer_mlp(
-        doc_bow, params.ntm_hidden, params.num_topics, activation_fn=tf.nn.relu
+        doc_bow_f,
+        params.ntm_hidden,
+        params.num_topics,
+        activation_fn=tf.nn.relu
     )
     doc_logvar = two_layer_mlp(
-        doc_bow, params.ntm_hidden, params.num_topics, activation_fn=tf.nn.relu
+        doc_bow_f,
+        params.ntm_hidden,
+        params.num_topics,
+        activation_fn=tf.nn.relu
     )
 
     doc_eps = tf.random_normal(

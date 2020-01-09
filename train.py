@@ -58,8 +58,9 @@ def main(params):
 
     word_vocab_size = len(word2idx.keys())
 
-    ## TODO
-    ## num_buckets
+    num_buckets = 41
+    for i in range(len(documents)):
+        documents[i] = np.clip(documents[i], 0, num_buckets - 1)
 
     topic_beta_initial = (1 / word_vocab_size) * np.ones(
         [params.batch_size, params.num_topics, word_vocab_size]
@@ -68,13 +69,19 @@ def main(params):
     with tf.Graph().as_default() as graph:
 
         enc_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="enc_inputs"
+            dtype=tf.int32,
+            shape=[params.batch_size, max_len_word],
+            name="enc_inputs"
         )
         dec_inputs = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="dec_inputs"
+            dtype=tf.int32,
+            shape=[params.batch_size, max_len_word],
+            name="dec_inputs"
         )
         doc_bow = tf.placeholder(
-            dtype=tf.int32, shape=[None, None], name="doc_bow"
+            dtype=tf.int32,
+            shape=[params.batch_size, word_vocab_size],
+            name="doc_bow"
         )
         topic_beta = tf.Variable(
             initial_value=topic_beta_initial,
@@ -123,16 +130,16 @@ def main(params):
 
         #### LOSS COMPUTATION ####
 
-        ## for word reconstruction loss
-        word_cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        ## for seq reconstruction loss
+        seq_cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
             logits=dec_logits_out, labels=enc_inputs
         )
-        word_mask = tf.sign(enc_inputs)
-        cross_entropy_loss_masked = word_cross_entropy_loss * word_mask
-        word_loss_by_example = tf.reduce_sum(
+        seq_mask = tf.cast(tf.sign(enc_inputs), dtype=tf.float64)
+        cross_entropy_loss_masked = seq_cross_entropy_loss * seq_mask
+        seq_loss_by_example = tf.reduce_sum(
             cross_entropy_loss_masked, axis=1
         ) / seq_length
-        word_recons_loss = tf.reduce_mean(word_loss_by_example)
+        seq_recons_loss = tf.reduce_mean(seq_loss_by_example)
 
         ## KL for two GMMs
         kl_seq = 0
@@ -149,10 +156,10 @@ def main(params):
 
         kl_seq += kl_simple(enc_topic_dist, topic_dist)  ## write the KL func
 
-        loss_seq = word_recons_loss - kl_seq
+        loss_seq = seq_recons_loss - kl_seq
 
         ## KL divergence loss on topic
-        kl_topic = tf.reduce_mean(
+        kl_doc = tf.reduce_mean(
             tf.reduce_sum(
                 kld(doc_mu, doc_logvar, doc_prior_mu, doc_prior_logvar)
             )
@@ -176,7 +183,9 @@ def main(params):
             [params.batch_size, word_vocab_size, num_buckets]
         )
         ## batch_size x vocab_size x num_buckets
-        doc_bow_onehot = tf.one_hot(doc_bow, depth=num_buckets)
+        doc_bow_onehot = tf.cast(
+            tf.one_hot(doc_bow, depth=num_buckets), dtype=tf.float64
+        )
         ## batch_size x vocab_size
         doc_recons_loss_by_word = tf.reduce_sum(
             topic_word_probs_avg * doc_bow_onehot, axis=-1
@@ -185,9 +194,9 @@ def main(params):
         doc_recons_loss_by_word_log = -tf.log(doc_recons_loss_by_word)
         doc_recons_loss = tf.reduce_mean(doc_recons_loss_by_word_log)
 
-        loss_topic = doc_recons_loss - kl_topic
+        loss_doc = doc_recons_loss - kl_doc
 
-        total_loss = loss_seq + loss_topic
+        total_loss = loss_seq + loss_doc
 
         gradients = tf.gradients(total_loss, tf.trainable_variables())
         clipped_grad, _ = tf.clip_by_global_norm(gradients, 5)
@@ -253,29 +262,26 @@ def main(params):
             summary_writer = tf.summary.FileWriter(params.LOG_DIR, sess.graph)
             summary_writer.add_graph(sess.graph)
             #ptb_data = PTBInput(params.batch_size, train_data)
-            num_iters = len(data) // params.batch_size
+            num_iters = len(encoder_sentences) // params.batch_size
             cur_it = -1
 
-            all_alpha, all_beta, all_tlb, all_kl, all_klzg, all_klzs = [], [], [], [], [], []
-            all_rl, all_wrl, all_lrl = [], [], []
-            all_l_ppl, all_w_ppl = [], []
+            all_loss, all_kl, all_kl_seq, all_kl_doc = [], [], [], []
+            all_rl, all_srl, all_drl = [], [], []
+            # all_t_ppl, all_w_ppl = [], []
 
-            schedule = scheduler(
-                params.fn, params.num_epochs * num_iters, params.cycles,
-                params.cycle_proportion, params.beta_lag, params.zero_start
-            )
+            # schedule = scheduler(
+            #     params.fn, params.num_epochs * num_iters, params.cycles,
+            #     params.cycle_proportion, params.beta_lag, params.zero_start
+            # )
 
-            data = np.array(data)
-            encoder_data = np.array(encoder_data)
-            val_data = np.array(val_data)
-            encoder_val_data = np.array(encoder_val_data)
-            labels = np.array(labels)
-            val_labels = np.array(val_labels)
+            encoder_sentences = np.array(encoder_sentences)
+            decoder_sentences = np.array(decoder_sentences)
+            documents = np.array(documents)
 
-            prev_epoch_elbo = cur_epoch_avg_elbo = 0
+            prev_epoch_loss = cur_epoch_avg_loss = 0
 
-            alpha_v = beta_v = -(1 * 0.5) / num_iters
-            kzs = -1  ## just to ignore "undef var" warning
+            # alpha_v = beta_v = -(1 * 0.5) / num_iters
+            # kzs = -1  ## just to ignore "undef var" warning
 
             current_epoch = 0
             # while True:
@@ -291,75 +297,55 @@ def main(params):
                 # prev_epoch_elbo = cur_epoch_avg_elbo
                 # cur_epoch_elbo_sum = 0
 
-                ## alpha, beta schedule
                 # if cur_it >= 8000:
                 #     break
-                rand_ids = np.random.permutation(len(data))
+                rand_ids = np.random.permutation(len(encoder_sentences))
                 for it in tqdm(range(num_iters)):
                     # if cur_it >= 8000:
                     #     break
                     cur_it += 1
-                    alpha_v, beta_v = schedule(cur_it)
-                    # beta_v, alpha_v = schedule(cur_it)
-                    # beta_v = 1
+                    # alpha_v, beta_v = schedule(cur_it)
 
-                    # alpha_v += (1 * 0.5) / num_iters
-                    # alpha_v = min(1, alpha_v)
-                    # if cur_it > 0 and -kzs < 0.8:
-                    #     alpha_v = 0
-
-                    # beta_v = alpha_v
-
-                    params.is_training = True
                     start_idx = it * params.batch_size
                     end_idx = (it + 1) * params.batch_size
                     indices = rand_ids[start_idx:end_idx]
 
-                    sent_inp_batch = encoder_data[indices]
-                    dec_word_inp_batch = data[indices]
-                    label_inp_batch = labels[indices]
+                    enc_sent_batch = encoder_sentences[indices]
+                    dec_sent_batch = decoder_sentences[indices]
+                    doc_batch = documents[indices]
 
-                    # not optimal!!
-                    word_length_ = np.array(
-                        [len(sent) for sent in sent_inp_batch]
+                    seq_length_ = np.array(
+                        [len(sent) for sent in enc_sent_batch]
                     ).reshape(params.batch_size)
 
                     # prepare encoder and decoder inputs to feed
-                    sent_inp_batch = zero_pad(sent_inp_batch, max_len_word)
-                    dec_word_inp_batch = zero_pad(
-                        dec_word_inp_batch, max_len_word
-                    )
+                    enc_sent_batch = zero_pad(enc_sent_batch, max_len_word)
+                    dec_sent_batch = zero_pad(dec_sent_batch, max_len_word)
 
                     feed = {
-                        word_inputs: sent_inp_batch,
-                        label_inputs: label_inp_batch,
-                        d_seq_length_word: word_length_,
-                        d_word_inputs: dec_word_inp_batch,
-                        alpha: alpha_v,
-                        beta: beta_v
+                        enc_inputs: enc_sent_batch,
+                        dec_inputs: dec_sent_batch,
+                        doc_bow: doc_batch,
                     }
 
-                    kzg, kzs, tlb, klw, o, rl, lrl, wrl = sess.run(
+                    loss, skl, dkl, srl, drl, _ = sess.run(
                         [
-                            neg_kld_zglobal, neg_kld_zsent, total_lower_bound,
-                            kl_term_weight, optimize, rec_loss, label_rec_loss,
-                            word_rec_loss
+                            total_loss, kl_seq, kl_doc, seq_recons_loss,
+                            doc_recons_loss, optimize
                         ],
                         feed_dict=feed
                     )
 
-                    all_alpha.append(alpha_v)
-                    all_beta.append(beta_v)
-                    all_tlb.append(tlb)
-                    all_kl.append(klw)
-                    all_klzg.append(-kzg)
-                    all_klzs.append(-kzs)
-                    all_rl.append(rl)
-                    all_lrl.append(lrl)
-                    all_wrl.append(wrl)
+                    all_loss.append(loss)
+                    all_kl.append(skl + dkl)
+                    all_kl_seq.append(skl)
+                    all_kl_doc.append(dkl)
+                    all_rl.append(srl + drl)
+                    all_srl.append(srl)
+                    all_drl.append(drl)
                     write_lists_to_file(
-                        'test_plot.txt', all_alpha, all_beta, all_tlb, all_kl,
-                        all_klzg, all_klzs, all_rl, all_lrl, all_wrl
+                        'test_plot.txt', all_loss, all_kl, all_kl_seq,
+                        all_kl_doc, all_rl, all_srl, all_drl
                     )
 
                     # cur_epoch_elbo_sum += tlb
@@ -374,64 +360,12 @@ def main(params):
                     #     )
                     #     # print(model_path_name)
 
-                # w_ppl, l_ppl = 0, 0
-                # batch_size = params.batch_size
-                # num_examples = 0
-                # for p_it in tqdm(range(len(encoder_val_data) // batch_size)):
-                #     s_idx = p_it * batch_size
-                #     e_idx = (p_it + 1) * batch_size
-
-                #     sent_inp_batch = encoder_val_data[s_idx:e_idx]
-                #     dec_word_inp_batch = val_data[s_idx:e_idx]
-                #     label_inp_batch = val_labels[s_idx:e_idx]
-                #     word_length_ = np.array(
-                #         [len(sent) for sent in sent_inp_batch]
-                #     ).reshape(params.batch_size)
-                #     sent_inp_batch = zero_pad(sent_inp_batch, max_len_word)
-                #     dec_word_inp_batch = zero_pad(
-                #         dec_word_inp_batch, max_len_word
-                #     )
-
-                #     num_examples += batch_size
-
-                #     wp, _ = sess.run(
-                #         [word_perplexity, word_rec_loss],
-                #         feed_dict={
-                #             word_inputs: sent_inp_batch,
-                #             label_inputs: label_inp_batch,
-                #             d_seq_length_word: word_length_,
-                #             d_word_inputs: dec_word_inp_batch,
-                #             alpha: 1,
-                #             beta: 1
-                #         }
-                #     )
-
-                #     w_ppl += wp * batch_size
-
-                # w_ppl /= num_examples
-
-                # all_w_ppl.append(w_ppl)
-                # write_lists_to_file('test_plot_ppl.txt', all_w_ppl)
-
-                # cur_epoch_avg_elbo = float(cur_epoch_elbo_sum) / (num_iters)
-                # print('\navg elbo:', cur_epoch_avg_elbo)
-
-                # if current_epoch > 1:
-                #     print('prev elbo:', prev_epoch_elbo)
-                #     perct_change = float(prev_epoch_elbo - cur_epoch_avg_elbo)/prev_epoch_elbo
-                #     print('change%:', perct_change)
-                #     ## stopping condition
-                #     if perct_change <= 0.01:
-                #         break
-
                 ## save model at end of epoch
-                if current_epoch % 2 == 1:
-                    path_to_save = os.path.join(
-                        params.MODEL_DIR, "vae_lstm_model"
-                    )
-                    model_path_name = saver.save(
-                        sess, path_to_save, global_step=cur_it
-                    )
+                # if current_epoch % 2 == 1:
+                path_to_save = os.path.join(params.MODEL_DIR, "topic_model")
+                model_path_name = saver.save(
+                    sess, path_to_save, global_step=cur_it
+                )
                 print("Time Taken:", datetime.datetime.now() - epoch_start_time)
 
             ## save model at end of training

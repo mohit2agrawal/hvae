@@ -24,7 +24,38 @@ def modify_sentences(data, vocab):
     return
 
 
+def save_pickle(var, fname):
+    with open(fname, 'wb') as f:
+        pickle.dump(var, f)
+
+
+def load_pickle(fname):
+    with open(fname, 'rb') as f:
+        return pickle.load(f)
+
+
 def get_data(folder, embed_size):
+
+    encoder_sentences_pkl_fname = os.path.join(
+        folder, 'pickles', 'encoder_sentences.pkl'
+    )
+    decoder_sentences_pkl_fname = os.path.join(
+        folder, 'pickles', 'decoder_sentences.pkl'
+    )
+    documents_pkl_fname = os.path.join(folder, 'pickles', 'documents.pkl')
+    embed_arr_pkl_fname = os.path.join(folder, 'pickles', 'embed_arr.pkl')
+    word2idx_pkl_fname = os.path.join(folder, 'pickles', 'word2idx.pkl')
+    idx2word_pkl_fname = os.path.join(folder, 'pickles', 'idx2word.pkl')
+
+    pickle_files = [
+        encoder_sentences_pkl_fname, decoder_sentences_pkl_fname,
+        documents_pkl_fname, embed_arr_pkl_fname, word2idx_pkl_fname,
+        idx2word_pkl_fname
+    ]
+    if all(map(os.path.isfile, pickle_files)):
+        print('data.py: loading from pickle files')
+        return list(map(load_pickle, pickle_files))
+
     sent_file = os.path.join(folder, 'train.txt')
     vector_file = 'updated.' + os.path.basename(folder) + '.embed.10epochs.vec'
     ## each line contains tab separated sentences
@@ -78,7 +109,7 @@ def get_data(folder, embed_size):
         for sentence in document:
             sentences.append(['<BOS>'] + sentence + ['<EOS>'])
             c.update(sentence)
-        doc = np.zeros([0] * vocab_size)
+        doc = np.zeros(vocab_size)
         for k, v in c.items():
             doc[word2idx[k]] = v
         for _ in range(len(document)):
@@ -86,6 +117,17 @@ def get_data(folder, embed_size):
 
     encoder_sentences = [x[1:] for x in sentences]
     decoder_sentences = [x[:-1] for x in sentences]
+
+    print('data.py: saving pickle files')
+    if not os.path.exists(os.path.dirname(encoder_sentences_pkl_fname)):
+        os.makedirs(os.path.dirname(encoder_sentences_pkl_fname))
+    save_pickle(encoder_sentences, encoder_sentences_pkl_fname)
+    save_pickle(decoder_sentences, decoder_sentences_pkl_fname)
+    save_pickle(documents, documents_pkl_fname)
+    save_pickle(embed_arr, embed_arr_pkl_fname)
+    save_pickle(word2idx, word2idx_pkl_fname)
+    save_pickle(idx2word, idx2word_pkl_fname)
+    print('data.py: saving pickle files\t..done')
 
     return encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word
 
