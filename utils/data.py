@@ -1,11 +1,13 @@
-from collections import Counter
-import pickle
-from fasttext import FastVector
-import numpy as np
-import os
 import json
+import os
 import pickle
+from collections import Counter
+
+import numpy as np
+from nltk.corpus import stopwords
 from tqdm import tqdm
+
+from fasttext import FastVector
 
 
 def read_lines(fname):
@@ -46,11 +48,14 @@ def get_data(folder, embed_size):
     embed_arr_pkl_fname = os.path.join(folder, 'pickles', 'embed_arr.pkl')
     word2idx_pkl_fname = os.path.join(folder, 'pickles', 'word2idx.pkl')
     idx2word_pkl_fname = os.path.join(folder, 'pickles', 'idx2word.pkl')
+    topic_word2idx_pkl_fname = os.path.join(
+        folder, 'pickles', 'topic_word2idx.pkl'
+    )
 
     pickle_files = [
         encoder_sentences_pkl_fname, decoder_sentences_pkl_fname,
         documents_pkl_fname, embed_arr_pkl_fname, word2idx_pkl_fname,
-        idx2word_pkl_fname
+        idx2word_pkl_fname, topic_word2idx_pkl_fname
     ]
     if all(map(os.path.isfile, pickle_files)):
         print('data.py: loading from pickle files')
@@ -72,11 +77,31 @@ def get_data(folder, embed_size):
         for sentence in text:
             c.update(sentence)  ## sentence is a list of words
 
-    vocab = [k for k, v in c.items() if v >= 6]
+    vocab = [k for k, v in c.items() if v >= 10]
     print('vocab_size', len(vocab) + 4)
     modify_sentences(data, vocab)
-    vocab = ['<PAD>', '<UNK>', '<BOS>', '<EOS>'] + sorted(vocab)
 
+    ## remove 0.1% most frequent words
+    all_words = set(vocab)
+    most_freq = set(k for k in c.most_common(len(vocab) // 1000))
+    print('len(most_freq)', len(most_freq))
+    topic_vocab = all_words - most_freq
+    ## remove words that appear in less than 100 docs
+    print('calculating doc freq')
+    doc_c = Counter()
+    for doc in tqdm(data):
+        doc_c.update(set(word for sentence in doc for word in sentence))
+    less_freq = set(k for k, v in doc_c.items() if v < 50)
+    print('len(less_freq)', len(less_freq))
+    topic_vocab -= less_freq
+    ## remove stop words
+    topic_vocab -= set(stopwords.words('english'))
+    topic_vocab_size = len(topic_vocab)
+    print('len(topic_vocab)', topic_vocab_size)
+    topic_vocab = sorted(topic_vocab)
+    topic_word2idx = dict(zip(topic_vocab, range(topic_vocab_size)))
+
+    vocab = ['<PAD>', '<UNK>', '<BOS>', '<EOS>'] + sorted(vocab)
     vocab_size = len(vocab)
     word2idx = dict(zip(vocab, range(vocab_size)))
     idx2word = dict(zip(range(vocab_size), vocab))
@@ -107,11 +132,14 @@ def get_data(folder, embed_size):
     for document in data:
         c = Counter()
         for sentence in document:
-            sentences.append(['<BOS>'] + sentence + ['<EOS>'])
+            sentences.append(
+                [word2idx[x] for x in ['<BOS>'] + sentence + ['<EOS>']]
+            )
             c.update(sentence)
-        doc = np.zeros(vocab_size)
+        doc = np.zeros(topic_vocab_size)
         for k, v in c.items():
-            doc[word2idx[k]] = v
+            if k in topic_vocab:
+                doc[topic_word2idx[k]] = v
         for _ in range(len(document)):
             documents.append(doc)
 
@@ -127,9 +155,10 @@ def get_data(folder, embed_size):
     save_pickle(embed_arr, embed_arr_pkl_fname)
     save_pickle(word2idx, word2idx_pkl_fname)
     save_pickle(idx2word, idx2word_pkl_fname)
+    save_pickle(topic_word2idx, topic_word2idx_pkl_fname)
     print('data.py: saving pickle files\t..done')
 
-    return encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word
+    return encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word, topic_word2idx
 
 
 # get_data('DATA/imdb_topic', 300)

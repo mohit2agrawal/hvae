@@ -49,7 +49,7 @@ def write_lists_to_file(filename, *lists):
 
 def main(params):
     data_folder = 'DATA/imdb_topic'
-    encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word = data_.get_data(
+    encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word, topic_word2idx = data_.get_data(
         data_folder, params.embed_size
     )
 
@@ -57,13 +57,14 @@ def main(params):
     print('max len word:', max_len_word)
 
     word_vocab_size = len(word2idx.keys())
+    topic_vocab_size = len(topic_word2idx.keys())
 
     num_buckets = 41
     for i in range(len(documents)):
         documents[i] = np.clip(documents[i], 0, num_buckets - 1)
 
-    topic_beta_initial = (1 / word_vocab_size) * np.ones(
-        [params.batch_size, params.num_topics, word_vocab_size]
+    topic_beta_initial = (1 / topic_vocab_size) * np.ones(
+        [params.batch_size, params.num_topics, topic_vocab_size]
     )
 
     with tf.Graph().as_default() as graph:
@@ -80,13 +81,13 @@ def main(params):
         )
         doc_bow = tf.placeholder(
             dtype=tf.int32,
-            shape=[params.batch_size, word_vocab_size],
+            shape=[params.batch_size, topic_vocab_size],
             name="doc_bow"
         )
         topic_beta = tf.Variable(
             initial_value=topic_beta_initial,
             dtype=tf.float64,
-            shape=[params.batch_size, params.num_topics, word_vocab_size],
+            shape=[params.batch_size, params.num_topics, topic_vocab_size],
             name="topic_beta"
         )
 
@@ -118,7 +119,7 @@ def main(params):
 
         topic_beta_sm = tf.nn.softmax(topic_beta)
         topic_dist, topic_word_probs = model.doc_decoder(
-            doc_sample, topic_beta_sm, word_vocab_size, num_buckets
+            doc_sample, topic_beta_sm, topic_vocab_size, num_buckets
         )
 
         dec_z_mu, dec_z_logvar, dec_z_sample = model.get_word_priors(
@@ -180,7 +181,7 @@ def main(params):
         ## batch_size x vocab_size x num_buckets
         topic_word_probs_avg = tf.reshape(
             topic_word_probs_flat_avg,
-            [params.batch_size, word_vocab_size, num_buckets]
+            [params.batch_size, topic_vocab_size, num_buckets]
         )
         ## batch_size x vocab_size x num_buckets
         doc_bow_onehot = tf.cast(
@@ -191,7 +192,7 @@ def main(params):
             topic_word_probs_avg * doc_bow_onehot, axis=-1
         )
         ## 0<x<1, log(x) < 0 , therefore, negative log
-        doc_recons_loss_by_word_log = -tf.log(doc_recons_loss_by_word)
+        doc_recons_loss_by_word_log = -tf.math.log(doc_recons_loss_by_word)
         doc_recons_loss = tf.reduce_mean(doc_recons_loss_by_word_log)
 
         loss_doc = doc_recons_loss - kl_doc
@@ -206,15 +207,32 @@ def main(params):
         )
 
         saver = tf.train.Saver(max_to_keep=5)
-        config = tf.ConfigProto(device_count={'GPU': 0})
+        # config = tf.ConfigProto(device_count={'GPU': 0})
+        gpu_options = tf.GPUOptions(allow_growth=True)
+        config = tf.ConfigProto(gpu_options=gpu_options)
         with tf.Session(config=config) as sess:
-            print("*********")
+            print("********** STARTING SESSION **********")
+
+            total_parameters = 0
+            #print_vars("trainable variables")
+            for i, variable in enumerate(tf.trainable_variables()):
+                # shape is an array of tf.Dimension
+                shape = variable.get_shape()
+                print('{} {} {}'.format(i, variable.name, shape))
+                variable_parameters = 1
+                for dim in shape:
+                    variable_parameters *= dim.value
+                total_parameters += variable_parameters
+            print("Total params:", total_parameters)
+            print("#Operations:", len(graph.get_operations()))
+
             sess.run(
                 [
                     tf.global_variables_initializer(),
                     tf.local_variables_initializer()
                 ]
             )
+            print("********** VARIABLES INITIALIZED **********")
 
             ## save the values weights are initialized by
             # with tf.variable_scope("", reuse=True):
@@ -242,19 +260,6 @@ def main(params):
                 print("-----exception occurred--------")
                 traceback.print_exc()
                 exit()
-
-            total_parameters = 0
-            #print_vars("trainable variables")
-            for i, variable in enumerate(tf.trainable_variables()):
-                # shape is an array of tf.Dimension
-                shape = variable.get_shape()
-                print('{} {} {}'.format(i, variable.name, shape))
-                variable_parameters = 1
-                for dim in shape:
-                    variable_parameters *= dim.value
-                total_parameters += variable_parameters
-            print("Total params:", total_parameters)
-            print("#Operations:", len(graph.get_operations()))
 
             # exit()
             if params.debug:
@@ -326,6 +331,7 @@ def main(params):
                         enc_inputs: enc_sent_batch,
                         dec_inputs: dec_sent_batch,
                         doc_bow: doc_batch,
+                        seq_length: seq_length_
                     }
 
                     loss, skl, dkl, srl, drl, _ = sess.run(
@@ -343,10 +349,10 @@ def main(params):
                     all_rl.append(srl + drl)
                     all_srl.append(srl)
                     all_drl.append(drl)
-                    write_lists_to_file(
-                        'test_plot.txt', all_loss, all_kl, all_kl_seq,
-                        all_kl_doc, all_rl, all_srl, all_drl
-                    )
+                    # write_lists_to_file(
+                    #     'test_plot.txt', all_loss, all_kl, all_kl_seq,
+                    #     all_kl_doc, all_rl, all_srl, all_drl
+                    # )
 
                     # cur_epoch_elbo_sum += tlb
 
@@ -359,6 +365,11 @@ def main(params):
                     #         sess, path_to_save, global_step=cur_it
                     #     )
                     #     # print(model_path_name)
+
+                write_lists_to_file(
+                    'test_plot.txt', all_loss, all_kl, all_kl_seq, all_kl_doc,
+                    all_rl, all_srl, all_drl
+                )
 
                 ## save model at end of epoch
                 # if current_epoch % 2 == 1:
