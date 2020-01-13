@@ -87,10 +87,7 @@ def main(params):
         topic_beta = tf.Variable(
             initial_value=topic_beta_initial,
             dtype=tf.float64,
-            shape=[
-                params.batch_size, params.num_topics, topic_vocab_size,
-                num_buckets
-            ],
+            shape=[params.batch_size, params.num_topics, topic_vocab_size],
             name="topic_beta"
         )
 
@@ -122,11 +119,8 @@ def main(params):
 
         topic_dist = model.doc_decoder(doc_sample)
 
-        ## sum over the buckets
-        ## then softmax over the topic vocab
-        topic_beta_sm = tf.nn.softmax(
-            tf.reduce_sum(topic_beta, axis=-1), axis=-1
-        )
+        ## softmax over the topic vocab
+        topic_beta_sm = tf.nn.softmax(topic_beta, axis=-1)
         dec_z_mu, dec_z_logvar, dec_z_sample = model.get_word_priors(
             topic_beta_sm, topic_dist
         )
@@ -175,30 +169,22 @@ def main(params):
 
         ## bs x 1 x T
         topic_dist_expanded = tf.expand_dims(topic_dist, axis=1)
-        ## bs x T x (vocab_size x num_buckets)
-        topic_word_probs_flat = tf.reshape(
-            topic_beta, [params.batch_size, params.num_topics, -1]
-        )
-        ## weighted average over topics
-        topic_word_probs_flat_avg = tf.squeeze(
-            tf.matmul(topic_dist_expanded, topic_word_probs_flat)
-        )
-        ## batch_size x vocab_size x num_buckets
-        topic_word_probs_avg = tf.reshape(
-            topic_word_probs_flat_avg,
-            [params.batch_size, topic_vocab_size, num_buckets]
-        )
-        ## batch_size x vocab_size x num_buckets
-        doc_bow_onehot = tf.cast(
-            tf.one_hot(doc_bow, depth=num_buckets), dtype=tf.float64
-        )
-        ## batch_size x vocab_size
-        doc_recons_loss_by_word = tf.reduce_sum(
-            topic_word_probs_avg * doc_bow_onehot, axis=-1
+        ## beta: bs x T x topic_vocab_size
+        ## weighted avg, with topic weights
+        ## sum( t_i * beta_i): bs x topic_vocab_size
+        topic_beta_avg = tf.squeeze(
+            tf.matmul(topic_dist_expanded, topic_beta_sm)
         )
         ## 0<x<1, log(x) < 0 , therefore, negative log
-        doc_recons_loss_by_word_log = -tf.math.log(doc_recons_loss_by_word)
-        doc_recons_loss = tf.reduce_mean(doc_recons_loss_by_word_log)
+        topic_beta_avg_log = -tf.math.log(topic_beta_avg)
+        ## loss = product( word_prob ^ word_freq )
+        ## => loss = sum( word_freq * log(word_prob) )
+        doc_recons_loss = tf.reduce_mean(
+            tf.reduce_sum(
+                topic_beta_avg_log * tf.cast(doc_bow, dtype=tf.float64),
+                axis=-1
+            )
+        )
 
         loss_doc = doc_recons_loss - kl_doc
 
