@@ -87,7 +87,10 @@ def main(params):
         topic_beta = tf.Variable(
             initial_value=topic_beta_initial,
             dtype=tf.float64,
-            shape=[params.batch_size, params.num_topics, topic_vocab_size],
+            shape=[
+                params.batch_size, params.num_topics, topic_vocab_size,
+                num_buckets
+            ],
             name="topic_beta"
         )
 
@@ -117,11 +120,13 @@ def main(params):
 
         doc_mu, doc_logvar, doc_sample = model.doc_encoder(doc_bow)
 
-        topic_beta_sm = tf.nn.softmax(topic_beta)
-        topic_dist, topic_word_probs = model.doc_decoder(
-            doc_sample, topic_beta_sm, topic_vocab_size, num_buckets
-        )
+        topic_dist = model.doc_decoder(doc_sample)
 
+        ## sum over the buckets
+        ## then softmax over the topic vocab
+        topic_beta_sm = tf.nn.softmax(
+            tf.reduce_sum(topic_beta, axis=-1), axis=-1
+        )
         dec_z_mu, dec_z_logvar, dec_z_sample = model.get_word_priors(
             topic_beta_sm, topic_dist
         )
@@ -172,7 +177,7 @@ def main(params):
         topic_dist_expanded = tf.expand_dims(topic_dist, axis=1)
         ## bs x T x (vocab_size x num_buckets)
         topic_word_probs_flat = tf.reshape(
-            topic_word_probs, [params.batch_size, params.num_topics, -1]
+            topic_beta, [params.batch_size, params.num_topics, -1]
         )
         ## weighted average over topics
         topic_word_probs_flat_avg = tf.squeeze(

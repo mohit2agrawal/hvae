@@ -229,7 +229,7 @@ def doc_encoder(doc_bow):
     return doc_mu, doc_logvar, doc_sample
 
 
-def doc_decoder(doc_sample, topic_word_dist, topic_vocab_size, num_buckets):
+def doc_decoder(doc_sample):
     with tf.variable_scope("doc_decoder"):
         ## Linear Transformation on doc_sample
         topic_dist = fully_connected(
@@ -241,6 +241,7 @@ def doc_decoder(doc_sample, topic_word_dist, topic_vocab_size, num_buckets):
             scope='topic_dist_fc'
         )
         topic_dist_sm = tf.nn.softmax(topic_dist)
+        return topic_dist_sm
 
         # ## T: num_topics
         # ## D: vocab_size
@@ -272,36 +273,36 @@ def doc_decoder(doc_sample, topic_word_dist, topic_vocab_size, num_buckets):
         # topic_word_probs = tf.stack(all_word_probs, axis=1)
 
         ## ** use same fully connected NN for all the topics
-        word_logits_mid = fully_connected(
-            tf.reshape(
-                topic_word_dist, [params.batch_size * params.num_topics, -1]
-            ),
-            256,
-            activation_fn=tf.nn.relu,
-            weights_initializer=xavier_initializer(),
-            biases_initializer=tf.zeros_initializer(),
-            scope='word_logits_fc'
-        )
-        word_logits = fully_connected(
-            word_logits_mid,
-            topic_vocab_size * num_buckets,
-            activation_fn=tf.nn.relu,
-            weights_initializer=xavier_initializer(),
-            biases_initializer=tf.zeros_initializer(),
-            scope='word_logits_fc2'
-        )
-        all_word_probs = tf.nn.softmax(
-            tf.reshape(word_logits, [-1, topic_vocab_size, num_buckets])
-        )
-        ## batch_size x num_topics x topic_vocab_size x num_buckets
-        topic_word_probs = tf.reshape(
-            all_word_probs, [
-                params.batch_size, params.num_topics, topic_vocab_size,
-                num_buckets
-            ]
-        )
+    #     word_logits_mid = fully_connected(
+    #         tf.reshape(
+    #             topic_word_dist, [params.batch_size * params.num_topics, -1]
+    #         ),
+    #         256,
+    #         activation_fn=tf.nn.relu,
+    #         weights_initializer=xavier_initializer(),
+    #         biases_initializer=tf.zeros_initializer(),
+    #         scope='word_logits_fc'
+    #     )
+    #     word_logits = fully_connected(
+    #         word_logits_mid,
+    #         topic_vocab_size * num_buckets,
+    #         activation_fn=tf.nn.relu,
+    #         weights_initializer=xavier_initializer(),
+    #         biases_initializer=tf.zeros_initializer(),
+    #         scope='word_logits_fc2'
+    #     )
+    #     all_word_probs = tf.nn.softmax(
+    #         tf.reshape(word_logits, [-1, topic_vocab_size, num_buckets])
+    #     )
+    #     ## batch_size x num_topics x topic_vocab_size x num_buckets
+    #     topic_word_probs = tf.reshape(
+    #         all_word_probs, [
+    #             params.batch_size, params.num_topics, topic_vocab_size,
+    #             num_buckets
+    #         ]
+    #     )
 
-    return topic_dist_sm, topic_word_probs
+    # return topic_dist_sm, topic_word_probs
 
 
 def get_word_priors(topic_word_dist, topic_dist):
@@ -338,6 +339,3 @@ def get_word_priors(topic_word_dist, topic_dist):
     dec_z = tf.matmul(topic_dist, dec_samples)
 
     return dec_mu, dec_logvar, dec_z
-
-
-
