@@ -11,7 +11,7 @@ from tensorflow.python.util.nest import flatten
 import utils.data as data_
 import model
 from utils import parameters
-# from utils.schedules import scheduler
+from utils.schedules import scheduler
 
 from tqdm import tqdm
 import pickle
@@ -47,8 +47,56 @@ def write_lists_to_file(filename, *lists):
             f.write('\n')
 
 
+def log_sum_exp(value, axis=None, keepdims=False):
+    """Numerically stable implementation of the (torch) operation
+    value.exp().sum(axis, keepdims).log()
+    """
+    if axis is not None:
+        m = np.ndarray.max(value, axis=axis, keepdims=True)
+        value0 = value - m
+        if keepdims is False:
+            m = np.squeeze(m, axis)
+        return m + np.log(np.sum(np.exp(value0), axis=axis, keepdims=keepdims))
+    else:
+        m = np.ndarray.reduce_max(value)
+        sum_exp = np.sum(np.exp(value - m))
+        return m + np.log(sum_exp)
+
+
+def calc_mi_q(mu, logvar, z_samples):
+    mu_shape = mu.shape
+    x_batch, nz = mu_shape[0], mu_shape[1]
+
+    # [z_batch, 1, nz]
+    z_samples = np.expand_dims(z_samples, 1)
+    #print("z_samples:", z_samples.shape)
+    #E_{q(z|x)}log(q(z|x)) = -0.5*nz*log(2*\pi) - 0.5*(1+logvar).sum(-1)
+    #(-0.5 * nz * math.log(2 * math.pi)- 0.5 * (1 + logvar).sum(-1)).mean()
+    neg_entropy = np.mean(
+        -0.5 * np.multiply(nz, np.log(2 * np.pi)) -
+        0.5 * np.sum(1 + logvar, axis=-1)
+    )
+
+    # [1, x_batch, nz]
+    mu, logvar = np.expand_dims(mu, 1), np.expand_dims(logvar, 1)
+    var = np.exp(logvar)
+
+    # (z_batch, x_batch, nz)
+    dev = z_samples - mu
+    # (z_batch, x_batch)
+    log_density = -0.5 * np.sum(np.square(dev) / var, -1) - 0.5 * (
+        np.multiply(nz, np.log(2 * np.pi), dtype=np.float64) +
+        np.sum(logvar, -1)
+    )
+
+    # log q(z): aggregate posterior
+    # [z_batch]
+    log_qz = log_sum_exp(log_density, axis=1) - np.log(x_batch)
+    return np.squeeze(neg_entropy - np.mean(log_qz, axis=-1))
+
+
 def main(params):
-    data_folder = 'DATA/imdb_topic'
+    data_folder = 'DATA/'+params.name
     encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word, topic_word2idx = data_.get_data(
         data_folder, params.embed_size
     )
@@ -59,9 +107,9 @@ def main(params):
     word_vocab_size = len(word2idx.keys())
     topic_vocab_size = len(topic_word2idx.keys())
 
-    num_buckets = 41
-    for i in range(len(documents)):
-        documents[i] = np.clip(documents[i], 0, num_buckets - 1)
+    # num_buckets = 41
+    # for i in range(len(documents)):
+    #     documents[i] = np.clip(documents[i], 0, num_buckets - 1)
 
     topic_beta_initial = (1 / topic_vocab_size) * np.ones(
         [params.batch_size, params.num_topics, topic_vocab_size]
@@ -90,6 +138,8 @@ def main(params):
             shape=[params.batch_size, params.num_topics, topic_vocab_size],
             name="topic_beta"
         )
+        alpha = tf.placeholder(dtype=tf.float64)
+        beta = tf.placeholder(dtype=tf.float64)
 
         with tf.device("/cpu:0"):
             # [data_dict.vocab_size, params.embed_size]
@@ -106,7 +156,7 @@ def main(params):
         # seq_length = tf.placeholder_with_default([0.0], shape=[None])
         seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
 
-        enc_z_mu, enc_z_logvar, enc_z_sample, enc_topic_dist = model.encoder(
+        enc_z_mu, enc_z_logvar, enc_z_sample, enc_topic_dist, enc_z_sample_all = model.encoder(
             enc_vect_inputs, params.batch_size, seq_length
         )
 
@@ -131,15 +181,37 @@ def main(params):
         #### LOSS COMPUTATION ####
 
         ## for seq reconstruction loss
-        seq_cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=dec_logits_out, labels=enc_inputs
+        ## using cross_entropy
+        # seq_cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        #     logits=dec_logits_out, labels=enc_inputs
+        # )
+        # seq_mask = tf.cast(tf.sign(enc_inputs), dtype=tf.float64)
+        # cross_entropy_loss_masked = seq_cross_entropy_loss * seq_mask
+        # seq_loss_by_example = tf.reduce_sum(
+        #     cross_entropy_loss_masked, axis=1
+        # ) / seq_length
+        # seq_recons_loss = tf.reduce_mean(seq_loss_by_example)
+
+        ## seq reconstruction loss as log likelihood
+        seq_softmax_out = tf.nn.softmax(dec_logits_out)
+        seq_mask_one_hot = tf.one_hot(
+            enc_inputs, word_vocab_size, axis=-1, dtype=tf.float64
         )
-        seq_mask = tf.cast(tf.sign(enc_inputs), dtype=tf.float64)
-        cross_entropy_loss_masked = seq_cross_entropy_loss * seq_mask
-        seq_loss_by_example = tf.reduce_sum(
-            cross_entropy_loss_masked, axis=1
-        ) / seq_length
-        seq_recons_loss = tf.reduce_mean(seq_loss_by_example)
+        seq_softmax_masked = tf.multiply(seq_softmax_out, seq_mask_one_hot)
+        seq_softmax_single = tf.reduce_sum(seq_softmax_masked, -1)
+
+        seq_softmax_single_log = tf.math.log(seq_softmax_single)
+
+        # seq_padding_mask = tf.cast(tf.sign(enc_inputs), dtype=tf.float64)
+        # seq_softmax_single_log = tf.multiply(
+        #     seq_softmax_single_log, seq_padding_mask
+        # )
+
+        seq_softmax_mean_per_sent = tf.reduce_sum(
+            seq_softmax_single_log, 1
+        )  #/ d_seq_length
+
+        seq_recons_loss = -tf.reduce_mean(seq_softmax_mean_per_sent)
 
         ## KL for two GMMs
         kl_seq = 0
@@ -154,9 +226,9 @@ def main(params):
                 )
             )
 
-        kl_seq += kl_simple(enc_topic_dist, topic_dist)  ## write the KL func
+        kl_seq += tf.reduce_mean(kl_simple(enc_topic_dist, topic_dist))
 
-        loss_seq = seq_recons_loss - kl_seq
+        loss_seq = seq_recons_loss + alpha * kl_seq
 
         ## KL divergence loss on topic
         kl_doc = tf.reduce_mean(
@@ -186,7 +258,7 @@ def main(params):
             )
         )
 
-        loss_doc = doc_recons_loss - kl_doc
+        loss_doc = doc_recons_loss + beta * kl_doc
 
         total_loss = loss_seq + loss_doc
 
@@ -263,12 +335,14 @@ def main(params):
 
             all_loss, all_kl, all_kl_seq, all_kl_doc = [], [], [], []
             all_rl, all_srl, all_drl = [], [], []
+            all_alpha, all_beta = [], []
+            all_smi, all_dmi = [], []
             # all_t_ppl, all_w_ppl = [], []
 
-            # schedule = scheduler(
-            #     params.fn, params.num_epochs * num_iters, params.cycles,
-            #     params.cycle_proportion, params.beta_lag, params.zero_start
-            # )
+            schedule = scheduler(
+                params.fn, params.num_epochs * num_iters, params.cycles,
+                params.cycle_proportion, params.beta_lag, params.zero_start
+            )
 
             encoder_sentences = np.array(encoder_sentences)
             decoder_sentences = np.array(decoder_sentences)
@@ -300,7 +374,7 @@ def main(params):
                     # if cur_it >= 8000:
                     #     break
                     cur_it += 1
-                    # alpha_v, beta_v = schedule(cur_it)
+                    alpha_v, beta_v = schedule(cur_it)
 
                     start_idx = it * params.batch_size
                     end_idx = (it + 1) * params.batch_size
@@ -322,16 +396,41 @@ def main(params):
                         enc_inputs: enc_sent_batch,
                         dec_inputs: dec_sent_batch,
                         doc_bow: doc_batch,
-                        seq_length: seq_length_
+                        seq_length: seq_length_,
+                        alpha: alpha_v,
+                        beta: beta_v,
                     }
 
-                    loss, skl, dkl, srl, drl, _ = sess.run(
+                    loss, skl, dkl, srl, drl, smu, slogvar, ssample, dmu, dlogvar, dsample, _ = sess.run(
                         [
                             total_loss, kl_seq, kl_doc, seq_recons_loss,
-                            doc_recons_loss, optimize
+                            doc_recons_loss, enc_z_mu, enc_z_logvar,
+                            enc_z_sample_all, doc_mu, doc_logvar, doc_sample,
+                            optimize
                         ],
                         feed_dict=feed
                     )
+
+                    smi = 0
+                    for _i in range(params.num_topics):
+                        smi += calc_mi_q(
+                            smu[:, _i, :], slogvar[:, _i, :], ssample[:, _i, :]
+                        )
+                    dmi = calc_mi_q(dmu, dlogvar, dsample)
+
+                    if cur_it % 100 == 0:
+                        print()
+                        print('loss:', loss)
+                        print('kl:', skl + dkl)
+                        print('skl:', skl)
+                        print('dkl:', dkl)
+                        print('rl:', srl + drl)
+                        print('srl:', srl)
+                        print('drl:', drl)
+                        print('smi:', smi)
+                        print('dmi:', dmi)
+                        print('alpha:', alpha_v)
+                        print('beta:', beta_v)
 
                     all_loss.append(loss)
                     all_kl.append(skl + dkl)
@@ -340,6 +439,11 @@ def main(params):
                     all_rl.append(srl + drl)
                     all_srl.append(srl)
                     all_drl.append(drl)
+                    all_smi.append(smi)
+                    all_dmi.append(dmi)
+                    all_alpha.append(alpha_v)
+                    all_beta.append(beta_v)
+
                     # write_lists_to_file(
                     #     'test_plot.txt', all_loss, all_kl, all_kl_seq,
                     #     all_kl_doc, all_rl, all_srl, all_drl
@@ -358,8 +462,9 @@ def main(params):
                     #     # print(model_path_name)
 
                 write_lists_to_file(
-                    'test_plot.txt', all_loss, all_kl, all_kl_seq, all_kl_doc,
-                    all_rl, all_srl, all_drl
+                    'test_plot.txt', all_alpha, all_beta, all_loss, all_kl,
+                    all_kl_seq, all_kl_doc, all_rl, all_srl, all_drl, all_smi,
+                    all_dmi
                 )
 
                 ## save model at end of epoch

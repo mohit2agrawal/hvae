@@ -61,14 +61,22 @@ def get_data(folder, embed_size):
         print('data.py: loading from pickle files')
         return list(map(load_pickle, pickle_files))
 
+    MIN_WORD_FREQ = 4
+    if 'imdb' in folder:
+        MIN_WORD_FREQ = 10
+    print('MIN_WORD_FREQ',MIN_WORD_FREQ)
+
     sent_file = os.path.join(folder, 'train.txt')
     vector_file = 'updated.' + os.path.basename(folder) + '.embed.10epochs.vec'
     ## each line contains tab separated sentences
-    data = read_lines(sent_file)[:5000]
+    data = read_lines(sent_file)
+    if 'imdb' in folder:
+        data = data[:5000]
+
     ## list of texts
     ## each text is a list of sentences
     ## each sentence is a list of words
-    data = [[x.split(' ') for x in line.split('\t')] for line in data]
+    data = [[x.lower().split(' ') for x in line.split('\t')] for line in data]
     print(len(data))
     print(sum(map(len, data)))
 
@@ -77,15 +85,22 @@ def get_data(folder, embed_size):
         for sentence in text:
             c.update(sentence)  ## sentence is a list of words
 
-    vocab = [k for k, v in c.items() if v >= 10]
+    vocab = [k for k, v in c.items() if v >= MIN_WORD_FREQ]
+    if 'amazon' in folder:
+        for x in ['vga', 'hal', 'recognizing', 'avery', 'nurses', 'stressed', 'family.i', 'greg', 'bad.i', 'tightened', 'guards', 'invite', 'offical', 'mingus', 'c.d', 'faucets', 'exceed', 'schwinn', 'pieza', 'rosa', 'rural', 'murders', '1971', 'usado', 'colourful', 'spills', 'insect', 'itch', 'pots', 'den', 'stroke', 'punches', 'thankfully', 'handlebars', '2.50', 'psychiatric', 'sandwich', 'tendency', 'perfectamente', 'profesional', 'upstairs', 'banking', 'dressed', 'betta', 'tenth', 'accompaniment', 'cumplio', 'brat', 'arena', 'godd', 'iraq', 'prone', 'hotmail.com', 'appearances', 'hombre', 'ufo', 'fitment', 'scriptures', 'tyson', 'good.but', "n'roll", 'exclusive', 'bogged', 'amen', 'intricacies', 'dreamer', 'transformers', 'salesperson', 'tart', 'withstand', 'specialy', 'clearing', 'freeway', 'brewer', '.worth', 'unsatisfactory', 'grabbing', 'annoy', 'rape']:
+            if x in vocab:
+                vocab.remove(x)
     print('vocab_size', len(vocab) + 4)
     modify_sentences(data, vocab)
 
     ## remove 0.1% most frequent words
     all_words = set(vocab)
-    most_freq = set(k for k in c.most_common(len(vocab) // 1000))
+    # most_freq = set(k for k in c.most_common(len(vocab) // 1000))
+    most_freq = set(k for k, v in c.items() if v > 500)
     print('len(most_freq)', len(most_freq))
     topic_vocab = all_words - most_freq
+    topic_vocab.discard('<UNK>')
+
     ## remove words that appear in less than 100 docs
     print('calculating doc freq')
     doc_c = Counter()
@@ -94,10 +109,17 @@ def get_data(folder, embed_size):
     less_freq = set(k for k, v in doc_c.items() if v < 50)
     print('len(less_freq)', len(less_freq))
     topic_vocab -= less_freq
+
     ## remove stop words
     topic_vocab -= set(stopwords.words('english'))
+    print('len(topic_vocab)', len(topic_vocab))
+
+    print('removing non alpha words')
+    topic_vocab -= set([k for k in topic_vocab if not k.isalpha()])
+
     topic_vocab_size = len(topic_vocab)
     print('len(topic_vocab)', topic_vocab_size)
+
     topic_vocab = sorted(topic_vocab)
     topic_word2idx = dict(zip(topic_vocab, range(topic_vocab_size)))
 
@@ -127,14 +149,10 @@ def get_data(folder, embed_size):
 
     ## sentences, bow
     print('generating document vectors (bag of words)')
-    sentences = []
     documents = []
     for document in data:
         c = Counter()
         for sentence in document:
-            sentences.append(
-                [word2idx[x] for x in ['<BOS>'] + sentence + ['<EOS>']]
-            )
             c.update(sentence)
         doc = np.zeros(topic_vocab_size)
         for k, v in c.items():
@@ -142,6 +160,19 @@ def get_data(folder, embed_size):
                 doc[topic_word2idx[k]] = v
         for _ in range(len(document)):
             documents.append(doc)
+
+    ## limit sentence length to 50
+    if 'imdb' in folder:
+        for document in data:
+            for i in range(len(document)):
+                document[i] = document[i][:50]
+
+    sentences = []
+    for document in data:
+        for sentence in document:
+            sentences.append(
+                [word2idx[x] for x in ['<BOS>'] + sentence + ['<EOS>']]
+            )
 
     encoder_sentences = [x[1:] for x in sentences]
     decoder_sentences = [x[:-1] for x in sentences]
@@ -159,51 +190,3 @@ def get_data(folder, embed_size):
     print('data.py: saving pickle files\t..done')
 
     return encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word, topic_word2idx
-
-
-# get_data('DATA/imdb_topic', 300)
-# exit()
-
-# print('...')
-# print(set(vocab) - set(vec.word2id.keys()))
-# print('...')
-# print(set(vec.word2id.keys()) - set(vocab))
-
-# word_embeddings = {word: vec[word] for word in vocab}
-# vocab.append('<PAD>')
-# word_embeddings['<PAD>'] = np.zeros_like(word_embeddings['<BOS>'])
-# vocab.sort()
-
-# label_embed_arr = np.eye(len(label_vocab))
-# label_embeddings = {
-#     label_vocab[i]: label_embed_arr[i, :]
-#     for i in range(len(label_vocab))
-# }
-
-# print(label_embeddings)
-# print('\n'.join([' '.join(x) for x in sentences[:10]]))
-# all_vocab = [vocab, vocab, label_vocab]
-
-#for sent in sentences[:5]:
-#    print(sent)
-#    print(dict(Counter(sent)))
-
-# with open(os.path.join(output_dir, 'data.txt'), 'w') as f:
-#     for sentence, label in zip(sentences, labels):
-#         #f.write(sentence)
-#         f.write(' '.join(sentence))
-#         f.write('\n')
-#         f.write(json.dumps(dict(Counter(sentence))))
-#         f.write('\n')
-#         f.write(label)
-#         f.write('\n')
-
-# def pickle_dump(fn, var):
-#     with open(os.path.join(output_dir, fn), 'wb') as f:
-#         pickle.dump(var, f)
-
-# pickle_dump('embed1.pkl', word_embeddings)
-# pickle_dump('embed2.pkl', word_embeddings)
-# pickle_dump('embed3.pkl', label_embeddings)
-
-# pickle_dump('vocab.pkl', all_vocab)

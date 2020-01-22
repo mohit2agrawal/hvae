@@ -124,12 +124,12 @@ def encoder(encoder_input, batch_size, seq_len):
         # ## sum(t_i x mu_i)
         # zsent_mu = tf.matmul(enc_topic_dist, zsent_mu)
         # zsent_logvar = tf.matmul(enc_topic_dist, zsent_logvar)
-        zsent_sample = tf.squeeze(
+        zsent_sample_avg = tf.squeeze(
             tf.matmul(tf.expand_dims(enc_topic_dist, axis=1), zsent_sample)
         )
 
         # Zsent_distribution = [zsent_mu, zsent_logvar]
-        return zsent_mu, zsent_logvar, zsent_sample, enc_topic_dist
+        return zsent_mu, zsent_logvar, zsent_sample_avg, enc_topic_dist, zsent_sample
 
 
 def word_decoder_model(
@@ -211,13 +211,13 @@ def doc_encoder(doc_bow):
         doc_mu = two_layer_mlp(
             doc_bow_f,
             params.ntm_hidden,
-            params.num_topics,
+            params.ntm_hidden,
             activation_fn=tf.nn.relu,
         )
         doc_logvar = two_layer_mlp(
             doc_bow_f,
             params.ntm_hidden,
-            params.num_topics,
+            params.ntm_hidden,
             activation_fn=tf.nn.relu,
         )
 
