@@ -51,11 +51,17 @@ def get_data(folder, embed_size):
     topic_word2idx_pkl_fname = os.path.join(
         folder, 'pickles', 'topic_word2idx.pkl'
     )
+    topic_idx2word_pkl_fname = os.path.join(
+        folder, 'pickles', 'topic_idx2word.pkl'
+    )
+    topic_vocab_pkl_fname = os.path.join(folder, 'pickles', 'topic_vocab.pkl')
+    vocab_pkl_fname = os.path.join(folder, 'pickles', 'vocab.pkl')
 
     pickle_files = [
         encoder_sentences_pkl_fname, decoder_sentences_pkl_fname,
         documents_pkl_fname, embed_arr_pkl_fname, word2idx_pkl_fname,
-        idx2word_pkl_fname, topic_word2idx_pkl_fname
+        idx2word_pkl_fname, topic_word2idx_pkl_fname, topic_idx2word_pkl_fname,
+        topic_vocab_pkl_fname
     ]
     if all(map(os.path.isfile, pickle_files)):
         print('data.py: loading from pickle files')
@@ -64,7 +70,7 @@ def get_data(folder, embed_size):
     MIN_WORD_FREQ = 4
     if 'imdb' in folder:
         MIN_WORD_FREQ = 10
-    print('MIN_WORD_FREQ',MIN_WORD_FREQ)
+    print('MIN_WORD_FREQ', MIN_WORD_FREQ)
 
     sent_file = os.path.join(folder, 'train.txt')
     vector_file = 'updated.' + os.path.basename(folder) + '.embed.10epochs.vec'
@@ -87,7 +93,22 @@ def get_data(folder, embed_size):
 
     vocab = [k for k, v in c.items() if v >= MIN_WORD_FREQ]
     if 'amazon' in folder:
-        for x in ['vga', 'hal', 'recognizing', 'avery', 'nurses', 'stressed', 'family.i', 'greg', 'bad.i', 'tightened', 'guards', 'invite', 'offical', 'mingus', 'c.d', 'faucets', 'exceed', 'schwinn', 'pieza', 'rosa', 'rural', 'murders', '1971', 'usado', 'colourful', 'spills', 'insect', 'itch', 'pots', 'den', 'stroke', 'punches', 'thankfully', 'handlebars', '2.50', 'psychiatric', 'sandwich', 'tendency', 'perfectamente', 'profesional', 'upstairs', 'banking', 'dressed', 'betta', 'tenth', 'accompaniment', 'cumplio', 'brat', 'arena', 'godd', 'iraq', 'prone', 'hotmail.com', 'appearances', 'hombre', 'ufo', 'fitment', 'scriptures', 'tyson', 'good.but', "n'roll", 'exclusive', 'bogged', 'amen', 'intricacies', 'dreamer', 'transformers', 'salesperson', 'tart', 'withstand', 'specialy', 'clearing', 'freeway', 'brewer', '.worth', 'unsatisfactory', 'grabbing', 'annoy', 'rape']:
+        for x in [
+            'vga', 'hal', 'recognizing', 'avery', 'nurses', 'stressed',
+            'family.i', 'greg', 'bad.i', 'tightened', 'guards', 'invite',
+            'offical', 'mingus', 'c.d', 'faucets', 'exceed', 'schwinn', 'pieza',
+            'rosa', 'rural', 'murders', '1971', 'usado', 'colourful', 'spills',
+            'insect', 'itch', 'pots', 'den', 'stroke', 'punches', 'thankfully',
+            'handlebars', '2.50', 'psychiatric', 'sandwich', 'tendency',
+            'perfectamente', 'profesional', 'upstairs', 'banking', 'dressed',
+            'betta', 'tenth', 'accompaniment', 'cumplio', 'brat', 'arena',
+            'godd', 'iraq', 'prone', 'hotmail.com', 'appearances', 'hombre',
+            'ufo', 'fitment', 'scriptures', 'tyson', 'good.but', "n'roll",
+            'exclusive', 'bogged', 'amen', 'intricacies', 'dreamer',
+            'transformers', 'salesperson', 'tart', 'withstand', 'specialy',
+            'clearing', 'freeway', 'brewer', '.worth', 'unsatisfactory',
+            'grabbing', 'annoy', 'rape'
+        ]:
             if x in vocab:
                 vocab.remove(x)
     print('vocab_size', len(vocab) + 4)
@@ -122,6 +143,7 @@ def get_data(folder, embed_size):
 
     topic_vocab = sorted(topic_vocab)
     topic_word2idx = dict(zip(topic_vocab, range(topic_vocab_size)))
+    topic_idx2word = dict(zip(range(topic_vocab_size), topic_vocab))
 
     vocab = ['<PAD>', '<UNK>', '<BOS>', '<EOS>'] + sorted(vocab)
     vocab_size = len(vocab)
@@ -187,6 +209,9 @@ def get_data(folder, embed_size):
     save_pickle(word2idx, word2idx_pkl_fname)
     save_pickle(idx2word, idx2word_pkl_fname)
     save_pickle(topic_word2idx, topic_word2idx_pkl_fname)
+    save_pickle(topic_idx2word, topic_idx2word_pkl_fname)
+    save_pickle(topic_vocab, topic_vocab_pkl_fname)
+    save_pickle(vocab, vocab_pkl_fname)
     print('data.py: saving pickle files\t..done')
 
-    return encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word, topic_word2idx
+    return encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word, topic_word2idx, topic_idx2word, topic_vocab

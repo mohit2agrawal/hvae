@@ -184,7 +184,7 @@ def word_decoder_model(
 
         logits = word_dense_layer(outputs)
 
-    return logits
+    return logits, final_state
 
 
 def two_layer_mlp(inputs, hidden_units_1, hidden_units_2, activation_fn=None):
@@ -244,7 +244,7 @@ def doc_decoder(doc_sample):
         return topic_dist_sm
 
 
-def get_word_priors(topic_word_dist, topic_dist):
+def get_word_priors(topic_word_dist, topic_dist, batch_size=params.batch_size):
     ## topic_word_dist are the beta
     with tf.variable_scope("decoder"):
 
@@ -263,16 +263,13 @@ def get_word_priors(topic_word_dist, topic_dist):
 
         ## ** same gauss_layer for every topic
         dec_mu, dec_logvar, dec_samples = gauss_layer(
-            tf.reshape(
-                topic_word_dist, [params.batch_size * params.num_topics, -1]
-            ), params.latent_size
+            tf.reshape(topic_word_dist, [batch_size * params.num_topics, -1]),
+            params.latent_size
         )
-        dec_mu = tf.reshape(dec_mu, [params.batch_size, params.num_topics, -1])
-        dec_logvar = tf.reshape(
-            dec_logvar, [params.batch_size, params.num_topics, -1]
-        )
+        dec_mu = tf.reshape(dec_mu, [batch_size, params.num_topics, -1])
+        dec_logvar = tf.reshape(dec_logvar, [batch_size, params.num_topics, -1])
         dec_samples = tf.reshape(
-            dec_samples, [params.batch_size, params.num_topics, -1]
+            dec_samples, [batch_size, params.num_topics, -1]
         )
 
         ## sum ( t_i * z_i)

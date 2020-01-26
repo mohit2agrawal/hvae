@@ -96,8 +96,8 @@ def calc_mi_q(mu, logvar, z_samples):
 
 
 def main(params):
-    data_folder = 'DATA/'+params.name
-    encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word, topic_word2idx = data_.get_data(
+    data_folder = 'DATA/' + params.name
+    encoder_sentences, decoder_sentences, documents, embed_arr, word2idx, idx2word, topic_word2idx, topic_idx2word, topic_vocab = data_.get_data(
         data_folder, params.embed_size
     )
 
@@ -106,6 +106,15 @@ def main(params):
 
     word_vocab_size = len(word2idx.keys())
     topic_vocab_size = len(topic_word2idx.keys())
+
+    ## 80% - 20% train - valid split
+    train_size = int(0.8 * len(encoder_sentences))
+    val_encoder_sentences = encoder_sentences[train_size:]
+    val_decoder_sentences = decoder_sentences[train_size:]
+    val_documents = documents[train_size:]
+    encoder_sentences = encoder_sentences[:train_size]
+    decoder_sentences = decoder_sentences[:train_size]
+    documents = documents[:train_size]
 
     # num_buckets = 41
     # for i in range(len(documents)):
@@ -160,7 +169,7 @@ def main(params):
             enc_vect_inputs, params.batch_size, seq_length
         )
 
-        dec_logits_out = model.word_decoder_model(
+        dec_logits_out, _ = model.word_decoder_model(
             dec_inputs, enc_z_sample, params.batch_size, word_vocab_size,
             seq_length, word_embedding
         )
@@ -331,6 +340,7 @@ def main(params):
             summary_writer.add_graph(sess.graph)
             #ptb_data = PTBInput(params.batch_size, train_data)
             num_iters = len(encoder_sentences) // params.batch_size
+            val_num_iters = len(val_encoder_sentences) // params.batch_size
             cur_it = -1
 
             all_loss, all_kl, all_kl_seq, all_kl_doc = [], [], [], []
@@ -418,7 +428,7 @@ def main(params):
                         )
                     dmi = calc_mi_q(dmu, dlogvar, dsample)
 
-                    if cur_it % 100 == 0:
+                    if cur_it % 500 == 0:
                         print()
                         print('loss:', loss)
                         print('kl:', skl + dkl)
@@ -427,8 +437,6 @@ def main(params):
                         print('rl:', srl + drl)
                         print('srl:', srl)
                         print('drl:', drl)
-                        print('smi:', smi)
-                        print('dmi:', dmi)
                         print('alpha:', alpha_v)
                         print('beta:', beta_v)
 
@@ -439,8 +447,6 @@ def main(params):
                     all_rl.append(srl + drl)
                     all_srl.append(srl)
                     all_drl.append(drl)
-                    all_smi.append(smi)
-                    all_dmi.append(dmi)
                     all_alpha.append(alpha_v)
                     all_beta.append(beta_v)
 
@@ -460,6 +466,57 @@ def main(params):
                     #         sess, path_to_save, global_step=cur_it
                     #     )
                     #     # print(model_path_name)
+
+                ## end of epoch
+                total_smi, total_dmi = 0, 0
+                for val_it in range(val_num_iters):
+                    start_idx = val_it * params.batch_size
+                    end_idx = (val_it + 1) * params.batch_size
+
+                    enc_sent_batch = val_encoder_sentences[start_idx:end_idx]
+                    dec_sent_batch = val_decoder_sentences[start_idx:end_idx]
+                    doc_batch = val_documents[start_idx:end_idx]
+
+                    seq_length_ = np.array(
+                        [len(sent) for sent in enc_sent_batch]
+                    ).reshape(params.batch_size)
+
+                    # prepare encoder and decoder inputs to feed
+                    enc_sent_batch = zero_pad(enc_sent_batch, max_len_word)
+                    dec_sent_batch = zero_pad(dec_sent_batch, max_len_word)
+
+                    feed = {
+                        enc_inputs: enc_sent_batch,
+                        dec_inputs: dec_sent_batch,
+                        doc_bow: doc_batch,
+                        seq_length: seq_length_,
+                        alpha: alpha_v,
+                        beta: beta_v,
+                    }
+
+                    smu, slogvar, ssample, dmu, dlogvar, dsample = sess.run(
+                        [
+                            enc_z_mu, enc_z_logvar, enc_z_sample_all, doc_mu,
+                            doc_logvar, doc_sample
+                        ],
+                        feed_dict=feed
+                    )
+
+                    smi = 0
+                    for _i in range(params.num_topics):
+                        smi += calc_mi_q(
+                            smu[:, _i, :], slogvar[:, _i, :], ssample[:, _i, :]
+                        )
+                    dmi = calc_mi_q(dmu, dlogvar, dsample)
+
+                    total_smi += smi
+                    total_dmi += dmi
+                total_smi /= val_num_iters
+                total_dmi /= val_num_iters
+                all_smi.append(total_smi)
+                all_dmi.append(total_dmi)
+                print('smi:', total_smi)
+                print('dmi:', total_dmi)
 
                 write_lists_to_file(
                     'test_plot.txt', all_alpha, all_beta, all_loss, all_kl,
