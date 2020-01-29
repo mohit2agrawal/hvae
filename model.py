@@ -273,6 +273,9 @@ def get_word_priors(topic_word_dist, topic_dist, batch_size=params.batch_size):
         )
 
         ## sum ( t_i * z_i)
-        dec_z = tf.matmul(topic_dist, dec_samples)
+        dec_z = tf.squeeze(
+            tf.matmul(tf.expand_dims(topic_dist, axis=1), dec_samples)
+        )
+        ## tf.matmul(topic_dist, dec_samples)
 
     return dec_mu, dec_logvar, dec_z

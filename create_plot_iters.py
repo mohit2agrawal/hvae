@@ -23,6 +23,8 @@ with open(filename) as f:
     rl = np.array([float(x) for x in f.readline().strip().split(" ")])
     srl = np.array([float(x) for x in f.readline().strip().split(" ")])
     drl = np.array([float(x) for x in f.readline().strip().split(" ")])
+    smi = np.array([float(x) for x in f.readline().strip().split(" ")])
+    dmi = np.array([float(x) for x in f.readline().strip().split(" ")])
 
 import matplotlib as mpl
 
@@ -68,10 +70,10 @@ plt.plot(kl, color="g", label="KL")
 plt.ylabel("weighted KL")
 
 ax = plt.subplot(4, 2, 5)
-ax.set_ylim([-0.05, max(kls)])
+# ax.set_ylim([-0.05, max(kls)])
 #plt.plot(max(kld_zg_arr) * .95 * alpha_arr, color="lightskyblue", label="alpha")
 #plt.plot(max(kld_zg_arr) * .95 * beta_arr, color="lightcoral", label="beta")
-# ax.set_ylim([-0.05, 15])
+ax.set_ylim([-0.05, 15])
 plt.plot(15 * .95 * alpha_arr, color="lightskyblue", label="alpha")
 plt.plot(15 * .95 * beta_arr, color="lightcoral", label="beta")
 plt.plot(kls, color="blue", label="kls")
@@ -79,10 +81,10 @@ plt.plot(kls, color="blue", label="kls")
 plt.ylabel("KL seq")
 
 ax = plt.subplot(4, 2, 7)
-ax.set_ylim([-0.05, max(kld)])
+# ax.set_ylim([-0.05, max(kld)])
 #plt.plot(max(kld_zs_arr) * .95 * alpha_arr, color="lightskyblue", label="alpha")
 #plt.plot(max(kld_zs_arr) * .95 * beta_arr, color="lightcoral", label="beta")
-# ax.set_ylim([-0.05, 15])
+ax.set_ylim([-0.05, 15])
 plt.plot(15 * .95 * alpha_arr, color="lightskyblue", label="alpha")
 plt.plot(15 * .95 * beta_arr, color="lightcoral", label="beta")
 plt.plot(kld, color="red", label="kld")
@@ -98,7 +100,7 @@ plt.ylabel("reconstruction loss")
 
 ax = plt.subplot(4, 2, 6)
 # ax = plt.subplot(5, 1, 2)
-# ax.set_ylim([0, 4])
+ax.set_ylim([0, 15])
 plt.plot(srl, color="green", label="srl")
 plt.ylabel("seq rl")
 
