@@ -494,10 +494,10 @@ def main(params):
                         beta: beta_v,
                     }
 
-                    smu, slogvar, ssample, dmu, dlogvar, dsample = sess.run(
+                    smu, slogvar, ssample, dmu, dlogvar, dsample, t_dist = sess.run(
                         [
                             enc_z_mu, enc_z_logvar, enc_z_sample_all, doc_mu,
-                            doc_logvar, doc_sample
+                            doc_logvar, doc_sample, enc_topic_dist
                         ],
                         feed_dict=feed
                     )
@@ -519,7 +519,7 @@ def main(params):
                 print('dmi:', total_dmi)
 
                 write_lists_to_file(
-                    'test_plot.txt', all_alpha, all_beta, all_loss, all_kl,
+                    'test_plot.{}.{}.txt'.format(params.name,params.num_topics), all_alpha, all_beta, all_loss, all_kl,
                     all_kl_seq, all_kl_doc, all_rl, all_srl, all_drl, all_smi,
                     all_dmi
                 )

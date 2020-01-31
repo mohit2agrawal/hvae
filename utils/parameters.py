@@ -12,13 +12,13 @@ def float_limited(x):
 
 class Parameters():
     # general parameters
-    num_topics = 20
+    num_topics = 10
     ntm_hidden = 256
     anneal_value = 1
     debug = True
-    name = "yelp"
+    #name = "yelp"
     # name = "amazon"
-    # name = "imdb_topic"
+    name = "imdb_topic"
     num_samples = 200
     # std=13, inputless_dec(dec_keep_rate=0.0)=111------------------------------>
     latent_size = 150
@@ -57,8 +57,8 @@ class Parameters():
     fine_tune_embed = False
     # technical parameters
     is_training = True
-    LOG_DIR = './model_logs_' + name + "/"
-    MODEL_DIR = './models_ckpts_' + name + "/"
+    LOG_DIR = './model_logs_' + name + "_" + str(num_topics) + "/"
+    MODEL_DIR = './models_ckpts_' + name + "_" + str(num_topics) + "/"
     visualise = False
     # gru base cell partially implemented
     base_cell = 'lstm'  # or GRU
@@ -165,6 +165,12 @@ class Parameters():
             default=self.num_samples,
             help="number of sentences to generate"
         )
+        parser.add_argument(
+            '--num_topics',
+            type=int,
+            default=self.num_topics,
+            help="number of topics"
+        )
 
         args = parser.parse_args()
         self.input_ = args.data
@@ -190,8 +196,7 @@ class Parameters():
         self.num_samples = args.num_samples
 
         self.name = args.name
-        LOG_DIR = './model_logs_' + self.name + "/"
-        MODEL_DIR = './models_ckpts_' + self.name + "/"
+        self.num_topics = args.num_topics
 
         # uncomment to make it GPU
         # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"

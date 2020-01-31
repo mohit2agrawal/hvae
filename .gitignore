@@ -13,3 +13,4 @@ graph*
 checkpoints
 *.swp
 chkpts
+logs

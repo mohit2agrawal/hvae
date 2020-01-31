@@ -7,6 +7,7 @@ import utils.model as model
 from tensorflow.contrib.layers import fully_connected
 from tensorflow.contrib.layers import xavier_initializer
 params = parameters.Parameters()
+params.parse_args()
 
 
 def rnn_placeholders(state):

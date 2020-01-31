@@ -16,6 +16,7 @@ from utils.schedules import scheduler
 from tqdm import tqdm
 import pickle
 import traceback
+from collections import Counter
 
 
 def kld(p_mu, p_logvar, q_mu, q_logvar):
@@ -95,52 +96,19 @@ def calc_mi_q(mu, logvar, z_samples):
     return np.squeeze(neg_entropy - np.mean(log_qz, axis=-1))
 
 
-def compute_disentanglement(z_list, y_list, y_dict, fl=1, M=1000):
-    '''Metric introduced in Kim and Mnih (2018)'''
-    N = len(z_list)  ## batch size OR num elements
-    D = len(z_list[0])  ## latent size
-
-    # Number of generic factors
-    K = len(y_dict.keys())
-    print('len(y_dict.keys()):', K)
-    # N X F X D
-    zs = np.array(z_list)
-    zs_std = np.std(z_list, axis=0)
-    #zs_std = np.reshape(np.std(z_list, axis = 1), [-1, 1])
-    print('zs_std.shape:', zs_std.shape)
-
-    zs_normalised = np.divide(zs, zs_std)
-    #zs_variance =
-    V = np.zeros(shape=[K, K])
-    ks = np.random.randint(0, K, M)  # sample fixed-factor idxs ahead of time
-
-    for m in range(M):
-        k = ks[m]
-        fk_vals = y_dict[k]  ##y_dict[k + 1]
-        fk = fk_vals[np.random.choice(len(fk_vals))]
-        #print(fk, k)
-
-        # choose L random zs that have this fk at factor k
-        indices = [
-            i for i in range(N) if np.array_equal(np.array(y_list[i][k]), fk)
-        ]
-
-        if indices:
-            zs_val = np.array([zs_normalised[i] for i in indices])
-            # print("zs_val shape", zs_val.shape)
-            zs_val_std = np.std(zs_val, axis=0)
-            # print("zs_val_std:", zs_val_std.shape)
-
-            temp_arr = []
-            # for k_ in range(K):
-            for k_ in range(K - 1):
-                temp_arr.append(np.mean(zs_val_std[k_ * fl:(k_ + 1) * fl]))
-                # temp_arr.append(np.mean(zs_val_std[k_ * fl:(k_ + 1) * fl]))
-            d_star = np.argmin(temp_arr)
-            V[d_star, k] += 1
-
-    print(V)
-    return (V.diagonal().sum() * 1.0) / V.sum()
+def softmax(x, zero_probs=None):
+    """Compute softmax values for each sets of scores in x."""
+    if x.ndim == 1:  ## for word logits passed in
+        ## let zero logits be zero prob (softmax)
+        x_nz = x[x != 0]
+        sm = np.zeros_like(x)
+        sm[x != 0] = np.exp(x_nz) / np.sum(np.exp(x_nz))
+        return sm
+    exp = np.exp(x)
+    if zero_probs:
+        for idx in zero_probs:
+            exp[:, idx] = 0
+    return exp / np.sum(exp, axis=1, keepdims=True)
 
 
 def main(params):
@@ -168,25 +136,24 @@ def main(params):
     # for i in range(len(documents)):
     #     documents[i] = np.clip(documents[i], 0, num_buckets - 1)
 
+    ## set batch_size as 1, will generate one sentence at a time
+    batch_size = 1
+
     topic_beta_initial = (1 / topic_vocab_size) * np.ones(
         [params.batch_size, params.num_topics, topic_vocab_size]
     )
 
     with tf.Graph().as_default() as graph:
 
-        enc_inputs = tf.placeholder(
-            dtype=tf.int32,
-            shape=[params.batch_size, max_len_word],
-            name="enc_inputs"
-        )
+        # enc_inputs = tf.placeholder(
+        #     dtype=tf.int32, shape=[batch_size, max_len_word], name="enc_inputs"
+        # )
         dec_inputs = tf.placeholder(
-            dtype=tf.int32,
-            shape=[params.batch_size, max_len_word],
-            name="dec_inputs"
+            dtype=tf.int32, shape=[batch_size, None], name="dec_inputs"
         )
         doc_bow = tf.placeholder(
             dtype=tf.int32,
-            shape=[params.batch_size, topic_vocab_size],
+            shape=[batch_size, topic_vocab_size],
             name="doc_bow"
         )
         topic_beta = tf.Variable(
@@ -195,8 +162,34 @@ def main(params):
             shape=[params.batch_size, params.num_topics, topic_vocab_size],
             name="topic_beta"
         )
+        topic_beta_input = tf.placeholder(
+            dtype=tf.float64,
+            shape=[batch_size, params.num_topics, topic_vocab_size],
+            name="topic_beta_input"
+        )
         alpha = tf.placeholder(dtype=tf.float64)
         beta = tf.placeholder(dtype=tf.float64)
+
+        decoder_cell_state = tf.placeholder(
+            dtype=tf.float64,
+            shape=[batch_size, 2 * params.decoder_hidden],
+            name="decoder_cell_state"
+        )
+        z_sample = tf.placeholder(
+            dtype=tf.float64,
+            shape=[batch_size, params.latent_size],
+            name="z_sample"
+        )
+        # topic_dist = tf.placeholder(
+        #     dtype=tf.float64,
+        #     shape=[batch_size, params.num_topics],
+        #     name="topic_dist"
+        # )
+        doc_sample = tf.placeholder(
+            dtype=tf.float64,
+            shape=[batch_size, params.ntm_hidden],
+            name="doc_sample"
+        )
 
         with tf.device("/cpu:0"):
             # [data_dict.vocab_size, params.embed_size]
@@ -206,30 +199,37 @@ def main(params):
                 name="word_embedding",
                 dtype=tf.float64
             )
-            enc_vect_inputs = tf.nn.embedding_lookup(
-                word_embedding, enc_inputs, name="enc_vect_inputs"
-            )
+            # enc_vect_inputs = tf.nn.embedding_lookup(
+            #     word_embedding, enc_inputs, name="enc_vect_inputs"
+            # )
 
         # seq_length = tf.placeholder_with_default([0.0], shape=[None])
         seq_length = tf.placeholder(shape=[None], dtype=tf.float64)
 
-        enc_z_mu, enc_z_logvar, enc_z_sample, enc_topic_dist, enc_z_sample_all = model.encoder(
-            enc_vect_inputs, params.batch_size, seq_length
+        # enc_z_mu, enc_z_logvar, enc_z_sample, enc_topic_dist, enc_z_sample_all = model.encoder(
+        #     enc_vect_inputs, batch_size, seq_length
+        # )
+
+        dec_logits_out, dec_cell_state = model.word_decoder_model(
+            dec_inputs,
+            z_sample,
+            batch_size,
+            word_vocab_size,
+            seq_length,
+            word_embedding,
+            gen_mode=True,
+            word_cell_state=decoder_cell_state
         )
 
-        dec_logits_out, _ = model.word_decoder_model(
-            dec_inputs, enc_z_sample, params.batch_size, word_vocab_size,
-            seq_length, word_embedding
-        )
-
-        doc_mu, doc_logvar, doc_sample = model.doc_encoder(doc_bow)
+        # doc_mu, doc_logvar, doc_sample = model.doc_encoder(doc_bow)
 
         topic_dist = model.doc_decoder(doc_sample)
 
         ## softmax over the topic vocab
-        topic_beta_sm = tf.nn.softmax(topic_beta, axis=-1)
+        topic_beta_red = tf.reduce_mean(topic_beta, axis=0, keep_dims=True)
+        topic_beta_sm = tf.nn.softmax(topic_beta_red, axis=-1)
         dec_z_mu, dec_z_logvar, dec_z_sample = model.get_word_priors(
-            topic_beta_sm, topic_dist
+            topic_beta_sm, topic_dist, batch_size
         )
 
         doc_prior_mu = tf.cast(0, dtype=tf.float64)
@@ -295,67 +295,113 @@ def main(params):
                 sess = tf_debug.LocalCLIDebugWrapperSession(sess)
             summary_writer = tf.summary.FileWriter(params.LOG_DIR, sess.graph)
             summary_writer.add_graph(sess.graph)
-            #ptb_data = PTBInput(params.batch_size, train_data)
-            num_iters = len(encoder_sentences) // params.batch_size
-            val_num_iters = len(val_encoder_sentences) // params.batch_size
+            #ptb_data = PTBInput(batch_size, train_data)
+            num_iters = len(encoder_sentences) // batch_size
+            val_num_iters = len(val_encoder_sentences) // batch_size
             cur_it = -1
-
-            schedule = scheduler(
-                params.fn, params.num_epochs * num_iters, params.cycles,
-                params.cycle_proportion, params.beta_lag, params.zero_start
-            )
 
             encoder_sentences = np.array(encoder_sentences)
             decoder_sentences = np.array(decoder_sentences)
             documents = np.array(documents)
 
-            enc_zs, dec_zs = [], []
-            num_sentences = 1000
-            for val_it in range(1 + (num_sentences // params.batch_size)):
-                start_idx = val_it * params.batch_size
-                end_idx = (val_it + 1) * params.batch_size
+            bos_idx = word2idx['<BOS>']
+            pad_idx = word2idx['<PAD>']
+            eos_idx = word2idx['<EOS>']
 
-                enc_sent_batch = val_encoder_sentences[start_idx:end_idx]
-                dec_sent_batch = val_decoder_sentences[start_idx:end_idx]
-                doc_batch = val_documents[start_idx:end_idx]
+            # topic_beta_ = sess.run(topic_beta)
 
-                seq_length_ = np.array([len(sent) for sent in enc_sent_batch]
-                                       ).reshape(params.batch_size)
+            NUM_SENTS = 1000
+            TOP_N = int(0.01 * topic_vocab_size) + 1
 
-                # prepare encoder and decoder inputs to feed
-                enc_sent_batch = zero_pad(enc_sent_batch, max_len_word)
-                dec_sent_batch = zero_pad(dec_sent_batch, max_len_word)
+            doc_mu_ = np.zeros((1, params.ntm_hidden))
+            doc_logvar_ = np.zeros((1, params.ntm_hidden))
+            eps = np.random.normal(size=np.shape(doc_mu_))
+            doc_sample_ = doc_mu_ + np.exp(0.5 * doc_logvar_) * eps
+            ## get topic distribution
+            ## and mu and logvar for z, to be fed to decoder
+            topic_dist_, d_z_mu, d_z_logvar, topic_beta_ = sess.run(
+                [topic_dist, dec_z_mu, dec_z_logvar, topic_beta_red],
+                feed_dict={doc_sample: doc_sample_}
+            )
 
-                feed = {
-                    enc_inputs: enc_sent_batch,
-                    dec_inputs: dec_sent_batch,
-                    doc_bow: doc_batch,
-                    seq_length: seq_length_,
-                    alpha: 1,
-                    beta: 1,
-                }
+            ## d_z_mu: batch_size (1) x num_topics x latent_size
+            ## mu_: 1 x latent_size
+            mu_ = np.matmul(topic_dist_, np.squeeze(d_z_mu))
+            logvar_ = np.matmul(topic_dist_, np.squeeze(d_z_logvar))
 
-                enc_z, dec_z, td = sess.run(
-                    [enc_z_sample, dec_z_sample, topic_dist], feed_dict=feed
-                )
-                enc_zs.append(enc_z)
-                dec_zs.append(dec_z)
+            ## generate sentences
+            generated_sentences = []
+            with tqdm(total=NUM_SENTS) as pbar:
+                while len(generated_sentences) < NUM_SENTS:
+                    eps = np.random.normal(size=np.shape(mu_))
+                    z_ = mu_ + np.exp(0.5 * logvar_) * eps
 
-            enc_zs = np.concatenate(enc_zs, axis=0)
-            dec_zs = np.concatenate(dec_zs, axis=0)
+                    dec_state = np.zeros(
+                        (batch_size, 2 * params.decoder_hidden), dtype=np.float
+                    )
+                    pred_word = '<BOS>'
+                    pred_word_idx = bos_idx
+                    pred_sentence = []
 
-            enc_zs = enc_zs[:num_sentences]
-            dec_zs = dec_zs[:num_sentences]
+                    while True:
+                        dec_logits, dec_state = sess.run(
+                            [dec_logits_out, dec_cell_state],
+                            feed_dict={
+                                z_sample: z_,
+                                decoder_cell_state: dec_state,
+                                dec_inputs: [[pred_word_idx]],
+                                seq_length: [1]
+                                # seq_length: [1 + len(pred_sentence)]
+                            }
+                        )
 
-            print('enc_zs:', enc_zs.shape)
-            print('dec_zs:', dec_zs.shape)
-            # exit()
-            y_dict = {}
-            for dim in range(dec_zs.shape[1]):
-                y_dict[dim] = list(set(dec_zs[:, dim]))
+                        dec_logits = dec_logits[0][0]
+                        dec_logits[bos_idx] = 0
+                        dec_logits[pad_idx] = 0
+                        if len(pred_sentence) == 0:
+                            dec_logits[eos_idx] = 0
+                        dec_sm = softmax(dec_logits)
 
-            disentanle_score = compute_disentanglement(enc_zs, dec_zs, y_dict)
-            print(disentanle_score)
+                        pred_word_idx = np.argmax(dec_sm)
+                        pred_word = idx2word[pred_word_idx]
+
+                        if pred_word == '<EOS>':
+                            break
+                        pred_sentence.append(pred_word)
+                        if (len(pred_sentence) > 2 * max_len_word):
+                            break
+
+                    ## end while True
+                    # print(len(generated_sentences), ' '.join(pred_sentence))
+                    if (len(pred_sentence) < 2 * max_len_word):
+                        generated_sentences.append(pred_sentence)
+                        pbar.update(1)
+                ## end while(len(generated_sentences)) < NUM_SENTS_PER_TOPIC
+
+            ## topic_dist_: bs (1) x T
+            ## beta: bs (1) x T x V
+            ## => topic_word_dist: ( 1xT ) x ( TxV ) -> 1xV -> V
+            topic_word_dist = np.squeeze(
+                np.matmul(topic_dist_, np.squeeze(topic_beta_))
+            )
+            top_topic_words_idx = np.argsort(topic_word_dist)[-TOP_N:]
+            top_topic_words = set(
+                topic_idx2word[x] for x in top_topic_words_idx
+            )
+
+            generated_sentences = [set(x) for x in generated_sentences]
+            ## HIT @ 3
+            ## 1: if any of top 3 words from topic appear in sentence
+            ## 0: else
+            score = sum(
+                [
+                    bool(top_topic_words.intersection(x))
+                    for x in generated_sentences
+                ]
+            )
+            score = float(score) / len(generated_sentences)
+
+            print('score:', score)
 
 
 if __name__ == "__main__":
