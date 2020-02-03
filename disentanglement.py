@@ -95,52 +95,52 @@ def calc_mi_q(mu, logvar, z_samples):
     return np.squeeze(neg_entropy - np.mean(log_qz, axis=-1))
 
 
-def compute_disentanglement(z_list, y_list, y_dict, fl=1, M=1000):
+def compute_disentanglement(z_list, y_list):
     '''Metric introduced in Kim and Mnih (2018)'''
     N = len(z_list)  ## batch size OR num elements
-    D = len(z_list[0])  ## latent size
+    Dz = len(z_list[0])  ## latent size
+    Dy = len(y_list[0])  ## latent size
 
-    # Number of generic factors
-    K = len(y_dict.keys())
-    print('len(y_dict.keys()):', K)
-    # N X F X D
-    zs = np.array(z_list)
-    zs_std = np.std(z_list, axis=0)
-    #zs_std = np.reshape(np.std(z_list, axis = 1), [-1, 1])
-    print('zs_std.shape:', zs_std.shape)
+    zs_normalised = np.divide(z_list, np.std(z_list, axis=0))
+    V = np.zeros(shape=[Dy, Dz])
 
-    zs_normalised = np.divide(zs, zs_std)
-    #zs_variance =
-    V = np.zeros(shape=[K, K])
-    ks = np.random.randint(0, K, M)  # sample fixed-factor idxs ahead of time
+    ## convert to range [0,1] along the latent dimension
+    y_list_mod = y_list - np.min(y_list, axis=0)
+    y_list_mod = np.divide(y_list_mod, np.max(y_list_mod, axis=0))
 
-    for m in range(M):
-        k = ks[m]
-        fk_vals = y_dict[k]  ##y_dict[k + 1]
-        fk = fk_vals[np.random.choice(len(fk_vals))]
-        #print(fk, k)
+    ## 10 bins
+    y_list_mod = y_list * 10
+    y_list_mod = y_list_mod.astype(int)
 
-        # choose L random zs that have this fk at factor k
-        indices = [
-            i for i in range(N) if np.array_equal(np.array(y_list[i][k]), fk)
-        ]
+    y_dict = {}
+    for ydim in range(Dy):
+        y_dict[ydim] = list(set(y_list_mod[:, ydim]))
 
-        if indices:
-            zs_val = np.array([zs_normalised[i] for i in indices])
-            # print("zs_val shape", zs_val.shape)
-            zs_val_std = np.std(zs_val, axis=0)
-            # print("zs_val_std:", zs_val_std.shape)
+    for ydim in range(Dy):
+        f_vals = y_dict[ydim]
 
-            temp_arr = []
-            # for k_ in range(K):
-            for k_ in range(K - 1):
-                temp_arr.append(np.mean(zs_val_std[k_ * fl:(k_ + 1) * fl]))
-                # temp_arr.append(np.mean(zs_val_std[k_ * fl:(k_ + 1) * fl]))
-            d_star = np.argmin(temp_arr)
-            V[d_star, k] += 1
+        for fval in f_vals:
+            indices = [i for i in range(N) if y_list_mod[i, ydim] == fval]
+
+            if indices:
+                zs_val = zs_normalised[indices]
+                # print("zs_val shape", zs_val.shape)
+                zs_val_std = np.std(zs_val, axis=0)
+                # print("zs_val_std:", zs_val_std.shape)
+
+                d_star = np.argmin(zs_val_std)
+                V[ydim, d_star] += 1
 
     print(V)
-    return (V.diagonal().sum() * 1.0) / V.sum()
+    print('sum along dim')
+    print(np.sum(V, axis=0))
+    print('diagonal sum')
+    diag = V.diagonal().sum()
+    print(diag)
+    v_sum = V.sum()
+    print('total v sum')
+    print(v_sum)
+    return (diag * 1.0) / v_sum
 
 
 def main(params):
@@ -350,11 +350,12 @@ def main(params):
             print('enc_zs:', enc_zs.shape)
             print('dec_zs:', dec_zs.shape)
             # exit()
-            y_dict = {}
-            for dim in range(dec_zs.shape[1]):
-                y_dict[dim] = list(set(dec_zs[:, dim]))
+            # y_dict = {}
+            # for dim in range(dec_zs.shape[1]):
+            #     y_dict[dim] = list(set(dec_zs[:, dim]))
 
-            disentanle_score = compute_disentanglement(enc_zs, dec_zs, y_dict)
+            # disentanle_score = compute_disentanglement(enc_zs, dec_zs, y_dict)
+            disentanle_score = compute_disentanglement(enc_zs, dec_zs)
             print(disentanle_score)
 
 
