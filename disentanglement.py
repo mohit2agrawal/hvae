@@ -98,29 +98,41 @@ def calc_mi_q(mu, logvar, z_samples):
 def compute_disentanglement(z_list, y_list):
     '''Metric introduced in Kim and Mnih (2018)'''
     N = len(z_list)  ## batch size OR num elements
-    Dz = len(z_list[0])  ## latent size
-    Dy = len(y_list[0])  ## latent size
+    Dz = z_list.shape[1]  ## latent size
+    nf = y_list.shape[1]  ## num of factors
 
     zs_normalised = np.divide(z_list, np.std(z_list, axis=0))
-    V = np.zeros(shape=[Dy, Dz])
 
     ## convert to range [0,1] along the latent dimension
+    print(y_list[0])
     y_list_mod = y_list - np.min(y_list, axis=0)
+    print(y_list_mod[0])
     y_list_mod = np.divide(y_list_mod, np.max(y_list_mod, axis=0))
+    print(y_list_mod[0])
 
     ## 10 bins
-    y_list_mod = y_list * 10
+
+    # for f_idx in range(nf):
+    #     print('f_idx', f_idx)
+    #     print(y_list_mod[:200, f_idx])
+    y_list_mod = y_list_mod * 10
+    print(y_list_mod[0])
     y_list_mod = y_list_mod.astype(int)
+    print(y_list_mod[0])
 
     y_dict = {}
-    for ydim in range(Dy):
-        y_dict[ydim] = list(set(y_list_mod[:, ydim]))
+    for f_idx in range(nf):
+        y_dict[f_idx] = list(set(y_list_mod[:, f_idx]))
+        # print('f_idx', f_idx)
+        # print(y_list_mod[:200, f_idx])
+    print(y_dict)
 
-    for ydim in range(Dy):
-        f_vals = y_dict[ydim]
+    V = np.zeros(shape=[nf, Dz])
+    for f_idx in range(nf):
+        f_vals = y_dict[f_idx]
 
         for fval in f_vals:
-            indices = [i for i in range(N) if y_list_mod[i, ydim] == fval]
+            indices = [i for i in range(N) if y_list_mod[i, f_idx] == fval]
 
             if indices:
                 zs_val = zs_normalised[indices]
@@ -129,18 +141,13 @@ def compute_disentanglement(z_list, y_list):
                 # print("zs_val_std:", zs_val_std.shape)
 
                 d_star = np.argmin(zs_val_std)
-                V[ydim, d_star] += 1
+                V[f_idx, d_star] += 1
 
+    print('V:', V.shape)
     print(V)
-    print('sum along dim')
-    print(np.sum(V, axis=0))
-    print('diagonal sum')
-    diag = V.diagonal().sum()
-    print(diag)
-    v_sum = V.sum()
-    print('total v sum')
-    print(v_sum)
-    return (diag * 1.0) / v_sum
+    print(np.sum(V, axis=1))
+
+    return np.sum(np.max(V, axis=0)) * 1. / np.sum(V)
 
 
 def main(params):
@@ -309,7 +316,7 @@ def main(params):
             decoder_sentences = np.array(decoder_sentences)
             documents = np.array(documents)
 
-            enc_zs, dec_zs = [], []
+            enc_zs, tds = [], []
             num_sentences = 1000
             for val_it in range(1 + (num_sentences // params.batch_size)):
                 start_idx = val_it * params.batch_size
@@ -335,27 +342,25 @@ def main(params):
                     beta: 1,
                 }
 
-                enc_z, dec_z, td = sess.run(
-                    [enc_z_sample, dec_z_sample, topic_dist], feed_dict=feed
-                )
+                enc_z, td = sess.run([enc_z_sample, topic_dist], feed_dict=feed)
                 enc_zs.append(enc_z)
-                dec_zs.append(dec_z)
+                tds.append(td)
 
             enc_zs = np.concatenate(enc_zs, axis=0)
-            dec_zs = np.concatenate(dec_zs, axis=0)
+            tds = np.concatenate(tds, axis=0)
 
             enc_zs = enc_zs[:num_sentences]
-            dec_zs = dec_zs[:num_sentences]
+            tds = tds[:num_sentences]
 
             print('enc_zs:', enc_zs.shape)
-            print('dec_zs:', dec_zs.shape)
+            print('tds:', tds.shape)
             # exit()
             # y_dict = {}
             # for dim in range(dec_zs.shape[1]):
             #     y_dict[dim] = list(set(dec_zs[:, dim]))
 
             # disentanle_score = compute_disentanglement(enc_zs, dec_zs, y_dict)
-            disentanle_score = compute_disentanglement(enc_zs, dec_zs)
+            disentanle_score = compute_disentanglement(enc_zs, tds)
             print(disentanle_score)
 
 

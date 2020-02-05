@@ -3,7 +3,6 @@ import tensorflow as tf
 import numpy as np
 import os
 from utils import parameters
-import utils.model as model
 from tensorflow.contrib.layers import fully_connected
 from tensorflow.contrib.layers import xavier_initializer
 params = parameters.Parameters()
